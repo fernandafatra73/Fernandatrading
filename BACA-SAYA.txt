@@ -1,0 +1,65 @@
+RECOGNITO TRADING FERNANDA
+Created By: Fernanda Fatria Fatra,SST.MM
+==========================================
+
+CARA PAKAI
+- Jalankan RecognitoTrading.exe. Tidak perlu instal apa pun.
+- Untuk komputer lain: salin RecognitoTrading.exe (dan events.txt bila perlu)
+  lalu langsung jalankan. Wajib terhubung internet (data live dari Binance).
+
+SUMBER DATA
+- Crypto: Binance Spot (data-api.binance.vision, otomatis cadangan ke api.binance.com).
+- XAU: Binance Futures XAUUSDT bila bisa diakses. Bila diblokir jaringan/ISP,
+  otomatis memakai PAXGUSDT (token emas 1:1 yang mengikuti harga XAU).
+  Sumber yang dipakai selalu tertulis di bilah status bawah.
+- Berita: kalender ekonomi online minggu ini + jadwal bawaan FOMC 2026 & NFP.
+
+KONTROL GRAFIK
+- Drag kiri/kanan          : geser waktu
+- Scroll mouse             : zoom candle kecil/besar
+- Shift + scroll           : geser waktu
+- Drag sumbu harga (kanan) : perbesar/perkecil range harga (atas/bawah)
+- Ctrl + scroll            : zoom harga
+- Drag sumbu waktu (bawah) : rapat/renggang candle
+- Klik ganda               : kembali ke skala harga otomatis
+
+ALARM
+- Sinyal BUY/SELL kuat dicek setiap 0,5 menit (30 detik) - tombol ALARM untuk ON/OFF.
+- Pergantian sesi Sydney/Tokyo/London/New York: 5 menit sebelum & saat berganti.
+- Berita high-impact (FOMC, NFP, CPI, dll): 5 menit sebelum & saat rilis.
+- Tambah jadwal berita sendiri di events.txt (format ada di dalam file).
+
+AUTO TRADE MT5 EXNESS (tab MT5)
+- Aturan: BUY 0.01 saat Bullish Engulfing (BuE) atau CHoCH bullish (tren turun -> naik).
+          BUY ditutup di candle ke-3 Three Black Crows (BBC / 3BC), harga pasar.
+          SELL 0.01 saat Bearish Engulfing (BeE) atau CHoCH bearish (tren naik -> turun).
+          SELL ditutup di candle ke-3 Three White Soldiers (BWS / 3WS), harga pasar.
+          Maksimal 1 BUY dan 1 SELL terbuka; setelah tertutup berulang lagi.
+- Sinyal dihitung EA RecognitoBridge dari candle MT5 Exness sendiri (candle tertutup,
+  timeframe chart tempat EA dipasang).
+- Pasang: tab MT5 > Pasang EA ke MT5 > di MT5 Refresh / Compile (F7) > seret EA ke
+  chart XAUUSD > izinkan Algo Trading.
+- Hentikan kapan saja: tombol AUTO TRADE (aplikasi) atau tombol di chart MT5.
+  TUTUP SEMUA POSISI menutup semua posisi milik EA.
+- SL pengaman default 300 pips (input EA, 0 = tanpa SL).
+- UJI DULU DI AKUN DEMO.
+
+CAPTURE GRAFIK (tab Capture, sebelah MT5)
+- Otomatis per blok 4 jam WIB, di-capture saat blok berakhir:
+    05-09 (jam 09:00), 09-13 (13:00), 13-17 (17:00), 17-21 (21:00),
+    21-01 (01:00), 01-04 (04:00).
+- Ditambah capture otomatis setiap pergantian sesi pasar (05, 07, 14, 16, 19, 23, 04 WIB).
+- Gambar (JPG) disimpan di folder "Capture" bersama nama grafik, jam, harga, sinyal
+  dan pesan sesi; daftar ada di tabel. CAPTURE SEKARANG = manual, HAPUS / HAPUS SEMUA.
+
+PESAN WAKTU TRADING (bar di bawah grafik, jam WIB)
+- Sydney 05:00-14:00, Tokyo 07:00-16:00, London 14:00-23:00, New York 19:00-04:00.
+- Persilangan: Sydney-Tokyo 07-14, Tokyo-London 14-16, London-New York 19-23.
+- Menampilkan sesi aktif, persilangan, dan sinyal yang biasanya terjadi.
+
+KOMPILASI ULANG (Delphi 7)
+  brcc32 -foRecognitoTrading.res RecognitoTrading.rc
+  dcc32 -B RecognitoTrading.dpr
+
+PERINGATAN: semua sinyal & analisa adalah alat bantu probabilitas,
+bukan jaminan profit. Selalu gunakan stop loss dan manajemen risiko.

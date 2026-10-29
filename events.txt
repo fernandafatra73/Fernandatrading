@@ -1,0 +1,6 @@
+# Jadwal berita tambahan untuk alarm Recognito Trading Fernanda
+# Format: YYYY-MM-DD HH:MM;Judul berita;Impact   (jam lokal komputer, mis. WIB)
+# Impact: High = ada alarm 5 menit sebelum & saat rilis
+# Contoh (hapus tanda # untuk mengaktifkan):
+# 2026-11-12 20:30;US CPI (Inflasi AS);High
+# 2026-12-09 02:00;FOMC Keputusan Suku Bunga;High
