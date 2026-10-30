@@ -11,7 +11,9 @@ uses
   uChart in 'uChart.pas',
   uSession in 'uSession.pas',
   uMT5 in 'uMT5.pas',
+  uMF in 'uMF.pas',
   uRec in 'uRec.pas',
+  uCctv in 'uCctv.pas',
   uMain in 'uMain.pas';
 
 {$R *.res}

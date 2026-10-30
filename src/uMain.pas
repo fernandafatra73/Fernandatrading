@@ -4,7 +4,7 @@ interface
 
 uses Windows, Messages, SysUtils, Classes, Graphics, Controls, Forms, ExtCtrls, StdCtrls,
   ComCtrls, Grids, Math, DateUtils, StrUtils, ShellAPI,
-  Dialogs, Jpeg, Registry, uUI, uNet, uData, uChart, uSession, uMT5, uRec;
+  Dialogs, Jpeg, Registry, Menus, uUI, uNet, uData, uChart, uSession, uMT5, uRec, uCctv;
 
 const
   TFNames: array[0..7] of string = ('1m', '5m', '15m', '30m', '1h', '4h', '1d', '1w');
@@ -61,6 +61,19 @@ type
     FOrdSide: Integer;
     FOrdPending, FPendSync, FMT5Old, FOrdMoved: Boolean;
     FFrontTicks: Integer;
+    { tab Edukasi: pilihan Edukasi / Running Text + teks berjalan di bawah grafik }
+    cbEduMode, cbRunSpeed: TComboBox;
+    pnlEduRun, pnlRun: TPanel;
+    memRun: TMemo;
+    pbRun: TPaintBox;
+    tmRun: TTimer;
+    FRunText: string;
+    FRunX: Integer;
+    FRunHidden: Boolean;
+    btnRunShow: TFlatBtn;
+    { menu KONEKSI MT5: 1. Koneksi, 2. Kamera CCTV PH }
+    pmConn: TPopupMenu;
+    Cctv: TCctvView;
     { ubah ukuran panel OPEN dengan mouse (pegangan di pojok kanan bawah) }
     pnlOrdIn: TPanel;
     pbGrip: TPaintBox;
@@ -191,6 +204,9 @@ type
     procedure UpdateOrderPanel;
     function OrdPrice: Double;
     procedure OnConnBtn(Sender: TObject);
+    procedure OnConnInfo(Sender: TObject);
+    procedure OnCctvOpen(Sender: TObject);
+    procedure OnCctvClosed(Sender: TObject);
     procedure OnOpenBtn(Sender: TObject);
     procedure OnOrdDrag(Sender: TObject; Button: TMouseButton; Shift: TShiftState; X, Y: Integer);
     procedure LayoutOrderPanel;
@@ -225,6 +241,15 @@ type
     procedure OnGridClick(Sender: TObject);
     procedure OnTimer1(Sender: TObject);
     procedure ForceFront;
+    procedure BuildEduTab(P: TPanel);
+    procedure OnEduMode(Sender: TObject);
+    procedure OnRunChange(Sender: TObject);
+    procedure OnRunClear(Sender: TObject);
+    procedure OnRunShow(Sender: TObject);
+    procedure OnRunTick(Sender: TObject);
+    procedure OnRunPaint(Sender: TObject);
+    procedure UpdateRunText;
+    function RunFile: string;
     procedure OnTimer30(Sender: TObject);
     procedure OnSessPaint(Sender: TObject);
     procedure OnToastClick(Sender: TObject);
@@ -533,12 +558,47 @@ begin
   lblInfo3.AutoSize := False; lblInfo3.Align := alClient;
   lblInfo3.WordWrap := True;
 
+  { teks berjalan (running text) tepat di bawah grafik; tersembunyi bila teks kosong }
+  pnlRun := MakePanel(pnlCenter, alBottom, 26, RGB(16, 20, 30));
+  pnlRun.Top := 0;
+  pnlRun.DoubleBuffered := True;
+  pnlRun.Visible := False;
+  pbRun := TPaintBox.Create(Self);
+  pbRun.Parent := pnlRun;
+  pbRun.Align := alClient;
+  pbRun.OnPaint := OnRunPaint;
+  tmRun := TTimer.Create(Self);
+  tmRun.Interval := 30;
+  tmRun.Enabled := False;
+  tmRun.OnTimer := OnRunTick;
+  if FileExists(ChangeFileExt(RunFile, '.ini')) then
+    with TStringList.Create do
+    try
+      LoadFromFile(ChangeFileExt(RunFile, '.ini'));
+      FRunHidden := Values['TAMPIL'] = '0';
+    finally
+      Free;
+    end;
+  if FileExists(RunFile) then memRun.Lines.LoadFromFile(RunFile);
+  UpdateRunText;
+
   Chart := TChartView.Create(Self);
   Chart.Parent := pnlCenter;
   Chart.Align := alClient;
   Chart.LocalOffH := LocalOffsetH;
   BuildCapView;
   BuildOrderPanel;
+
+  { Kamera CCTV PH: menutupi area grafik saat dibuka dari menu KONEKSI MT5 }
+  Cctv := TCctvView.Create(Self);
+  Cctv.Visible := False;
+  Cctv.Parent := pnlCenter;
+  Cctv.Align := alClient;
+  Cctv.Setup(ExtractFilePath(ParamStr(0)) + 'cctv.ini');
+  Cctv.OnCloseView := OnCctvClosed;
+  pmConn := TPopupMenu.Create(Self);
+  pmConn.Items.Add(NewItem('1.  Koneksi MT5', 0, False, True, OnConnInfo, 0, 'miConn'));
+  pmConn.Items.Add(NewItem('2.  Kamera CCTV PH', 0, False, True, OnCctvOpen, 0, 'miCctv'));
 
   pnlToast := TPanel.Create(Self);
   pnlToast.Parent := pnlCenter;
@@ -735,7 +795,7 @@ begin
   reNews := NewRE(pages[2], False);
 
   BuildCalc(pages[3]);
-  reEdu := NewRE(pages[4], False);
+  BuildEduTab(pages[4]);
   reLog := NewRE(pages[5], False);
   BuildMT5(pages[6]);
   BuildCapture(pages[7]);
@@ -1532,7 +1592,29 @@ end;
 
 { ---------------- Koneksi MT5 + order manual pengguna (tombol OPEN) ---------------- }
 
+{ tombol KONEKSI MT5 membuka dropdown: 1. Koneksi, 2. Kamera CCTV PH }
 procedure TMainForm.OnConnBtn(Sender: TObject);
+var pt: TPoint;
+begin
+  pt := btnConn.ClientToScreen(Point(0, btnConn.Height));
+  pmConn.Popup(pt.X, pt.Y);
+end;
+
+procedure TMainForm.OnCctvOpen(Sender: TObject);
+begin
+  OnCapClose(nil);
+  Chart.Visible := False;
+  Cctv.OpenView;
+  if pnlOrder.Visible then pnlOrder.BringToFront;
+end;
+
+procedure TMainForm.OnCctvClosed(Sender: TObject);
+begin
+  Chart.Visible := True;
+  Chart.Invalidate;
+end;
+
+procedure TMainForm.OnConnInfo(Sender: TObject);
 begin
   if FMT5Alive then
     MessageDlg('Sudah terhubung Fatra73' + #13#10#13#10 + lblMT5Acc.Caption + #13#10 + lblMT5Conn.Caption,
@@ -2126,6 +2208,150 @@ begin
     Bg := clrYellow; Fg := clrBg; Bold := True;
   end;
   reCalc := NewRE(P, False);
+end;
+
+{ ---------------- Tab Edukasi: Edukasi / Running Text ---------------- }
+
+procedure TMainForm.BuildEduTab(P: TPanel);
+var top, f: TPanel;
+begin
+  top := MakePanel(P, alTop, 34, clrPanel);
+  MakeLabel(top, 'Tampilkan:', 4, 9, clrMuted, 9, True);
+  cbEduMode := TComboBox.Create(Self);
+  cbEduMode.Parent := top;
+  cbEduMode.Style := csDropDownList;
+  cbEduMode.SetBounds(80, 5, 200, 22);
+  cbEduMode.Color := clrPanel2; cbEduMode.Font.Color := clrYellow; cbEduMode.Font.Style := [fsBold];
+  cbEduMode.Items.CommaText := '"1. Edukasi","2. Running Text"';
+  cbEduMode.ItemIndex := 0;
+  cbEduMode.OnChange := OnEduMode;
+
+  reEdu := NewRE(P, False);
+
+  { editor running text }
+  pnlEduRun := MakePanel(P, alClient, 0, clrPanel);
+  pnlEduRun.Visible := False;
+  f := MakePanel(pnlEduRun, alTop, 58, clrPanel);
+  MakeLabel(f, 'RUNNING TEXT', 4, 2, clrYellow, 11, True);
+  MakeLabel(f, 'Tulis teks di bawah: langsung berjalan pelan di bawah grafik. Kosong = tidak tampil.', 4, 24, clrMuted, 8);
+  MakeLabel(f, 'Beberapa baris digabung jadi satu jalur.', 4, 38, clrMuted, 7);
+  memRun := TMemo.Create(Self);
+  memRun.Parent := pnlEduRun;
+  memRun.Align := alTop;
+  memRun.Height := 140;
+  memRun.Color := clrPanel2;
+  memRun.Font.Name := 'Segoe UI'; memRun.Font.Size := 10; memRun.Font.Color := clrText;
+  memRun.ScrollBars := ssVertical;
+  memRun.OnChange := OnRunChange;
+  f := MakePanel(pnlEduRun, alTop, 40, clrPanel);
+  f.Top := 1000;
+  MakeLabel(f, 'Kecepatan:', 4, 14, clrMuted, 9, True);
+  cbRunSpeed := TComboBox.Create(Self);
+  cbRunSpeed.Parent := f;
+  cbRunSpeed.Style := csDropDownList;
+  cbRunSpeed.SetBounds(80, 10, 110, 22);
+  cbRunSpeed.Color := clrPanel2; cbRunSpeed.Font.Color := clrText;
+  cbRunSpeed.Items.CommaText := 'Pelan,Sedang,Cepat';
+  cbRunSpeed.ItemIndex := 0;
+  with MakeBtn(f, 'HAPUS TEKS', 200, 8, 100, 26, OnRunClear) do
+  begin
+    Bg := clrRedDim; Fg := clWhite; Bold := True;
+  end;
+  { tampil / sembunyikan teks berjalan tanpa menghapus teksnya }
+  btnRunShow := MakeBtn(f, 'SEMBUNYIKAN', 306, 8, 110, 26, OnRunShow);
+  btnRunShow.Bg := clrBlue; btnRunShow.Fg := clWhite; btnRunShow.Bold := True;
+end;
+
+procedure TMainForm.OnRunShow(Sender: TObject);
+begin
+  FRunHidden := not FRunHidden;
+  try
+    with TStringList.Create do
+    try
+      Values['TAMPIL'] := Sx(FRunHidden, '0', '1');
+      SaveToFile(ChangeFileExt(RunFile, '.ini'));
+    finally
+      Free;
+    end;
+  except
+  end;
+  FRunText := #0;   { paksa hitung ulang }
+  UpdateRunText;
+end;
+
+procedure TMainForm.OnEduMode(Sender: TObject);
+begin
+  reEdu.Visible := cbEduMode.ItemIndex = 0;
+  pnlEduRun.Visible := cbEduMode.ItemIndex = 1;
+  if pnlEduRun.Visible and memRun.CanFocus then memRun.SetFocus;
+end;
+
+function TMainForm.RunFile: string;
+begin
+  Result := ExtractFilePath(ParamStr(0)) + 'runningtext.txt';
+end;
+
+procedure TMainForm.OnRunChange(Sender: TObject);
+begin
+  try
+    memRun.Lines.SaveToFile(RunFile);
+  except
+  end;
+  UpdateRunText;
+end;
+
+procedure TMainForm.OnRunClear(Sender: TObject);
+begin
+  memRun.Clear;
+end;
+
+{ gabung semua baris jadi satu jalur; kosong = bar disembunyikan }
+procedure TMainForm.UpdateRunText;
+var i: Integer; s, t: string;
+begin
+  s := '';
+  for i := 0 to memRun.Lines.Count - 1 do
+  begin
+    t := Trim(memRun.Lines[i]);
+    if t = '' then Continue;
+    if s <> '' then s := s + '     ' + #149 + '     ';
+    s := s + t;
+  end;
+  btnRunShow.Caption := Sx(FRunHidden, 'TAMPILKAN', 'SEMBUNYIKAN');
+  btnRunShow.Bg := Cx(FRunHidden, clrGreenDim, clrBlue);
+  btnRunShow.Invalidate;
+  if s = FRunText then Exit;
+  if (FRunText = '') or (FRunText = #0) then FRunX := pbRun.Width;   { mulai dari kanan }
+  FRunText := s;
+  { tampil hanya bila ada teks dan tidak disembunyikan }
+  pnlRun.Visible := (s <> '') and not FRunHidden;
+  tmRun.Enabled := pnlRun.Visible;
+  pbRun.Invalidate;
+end;
+
+procedure TMainForm.OnRunTick(Sender: TObject);
+const Step: array[0..2] of Integer = (1, 2, 4);
+begin
+  if not pnlRun.Visible then Exit;
+  Dec(FRunX, Step[Max(0, cbRunSpeed.ItemIndex)]);
+  pbRun.Invalidate;
+end;
+
+procedure TMainForm.OnRunPaint(Sender: TObject);
+var cv: TCanvas; tw: Integer;
+begin
+  cv := pbRun.Canvas;
+  cv.Brush.Color := RGB(16, 20, 30);
+  cv.FillRect(pbRun.ClientRect);
+  if FRunText = '' then Exit;
+  cv.Font.Name := 'Segoe UI'; cv.Font.Size := 11; cv.Font.Style := [fsBold]; cv.Font.Color := clrYellow;
+  tw := cv.TextWidth(FRunText);
+  { setelah teks habis di kiri, mulai lagi dari kanan }
+  if FRunX < -tw then FRunX := pbRun.Width;
+  if FRunX > pbRun.Width then FRunX := pbRun.Width;
+  cv.Brush.Style := bsClear;
+  cv.TextOut(FRunX, (pbRun.Height - cv.TextHeight(FRunText)) div 2, FRunText);
+  cv.Brush.Style := bsSolid;
 end;
 
 procedure TMainForm.BuildEdu;

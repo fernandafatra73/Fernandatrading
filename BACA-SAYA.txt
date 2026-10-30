@@ -74,6 +74,24 @@ KALKULATOR
   harga saat modal habis untuk BUY dan SELL, plus tabel lot 0.01 - 1.00.
   Rumus: habis = modal / (lot x 100). Belum termasuk spread, swap & komisi.
 
+KAMERA CCTV PH (tombol KONEKSI MT5 > 2. Kamera CCTV PH)
+- Klik KONEKSI MT5: menu 1. Koneksi MT5 (cek koneksi) atau 2. Kamera CCTV PH.
+- 4 kamera IP / WiFi (RTSP) tampil 2x2 gaya NVR: nama kamera, LIVE berkedip, tanggal & jam.
+  Klik ganda satu kamera = layar penuh, klik ganda lagi = kembali 2x2. Putus = sambung ulang otomatis.
+- PENGATURAN KAMERA: centang Aktif, nama ruangan, Merek (isi alamat otomatis), alamat RTSP,
+  user & password. Contoh: Hikvision rtsp://IP:554/Streaming/Channels/102,
+  Dahua/Imou rtsp://IP:554/cam/realmonitor?channel=1&subtype=1, Tapo rtsp://IP:554/stream2,
+  Ezviz rtsp://IP:554/h264/ch1/sub/av_stream (user admin, password = kode verifikasi).
+- Kamera & komputer harus satu jaringan WiFi. Pakai sub stream (ringan). Kamera H.265 butuh
+  "HEVC Video Extensions" (Microsoft Store) atau ubah ke H.264 di aplikasi kamera.
+- Pengaturan & password disimpan di cctv.ini (tidak ikut ke GitHub, jangan dibagikan).
+
+EDUKASI & RUNNING TEXT (tab Edukasi)
+- Dropdown "Tampilkan": 1. Edukasi (materi) atau 2. Running Text.
+- Running Text: tulis teks di kotak, langsung berjalan pelan di bawah grafik.
+  Kosong = bar tidak tampil. Kecepatan Pelan / Sedang / Cepat. Tersimpan di runningtext.txt.
+  Tombol SEMBUNYIKAN / TAMPILKAN: sembunyikan teks berjalan tanpa menghapus teksnya.
+
 PESAN WAKTU TRADING (bar di bawah grafik, jam WIB)
 - Sydney 05:00-14:00, Tokyo 07:00-16:00, London 14:00-23:00, New York 19:00-04:00.
 - Persilangan: Sydney-Tokyo 07-14, Tokyo-London 14-16, London-New York 19-23.
