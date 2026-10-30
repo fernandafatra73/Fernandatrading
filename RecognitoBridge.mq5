@@ -1,6 +1,6 @@
 //+------------------------------------------------------------------+
 //|  RecognitoBridge.mq5                                              |
-//|  Recognito Trading Fernanda - Auto trade MT5 (Exness)             |
+//|  Fernanda Trading Recognito - Auto trade MT5 (Exness)             |
 //|  Created By: Fernanda Fatria Fatra,SST.MM                         |
 //|                                                                  |
 //|  Aturan (semua eksekusi harga pasar, pada candle tertutup):       |
@@ -17,8 +17,8 @@
 //|   RecognitoStatus.txt (status dari EA)                            |
 //+------------------------------------------------------------------+
 #property copyright "Created By: Fernanda Fatria Fatra,SST.MM"
-#property version   "1.10"
-#property description "Recognito Trading Fernanda: BuE/CHoCH naik -> BUY (tutup di BBC ke-3), BeE/CHoCH turun -> SELL (tutup di BWS ke-3)"
+#property version   "1.30"
+#property description "Fernanda Trading Recognito: BuE/CHoCH naik -> BUY (tutup di BBC ke-3), BeE/CHoCH turun -> SELL (tutup di BWS ke-3)"
 
 #include <Trade\Trade.mqh>
 
@@ -26,16 +26,19 @@ input double InpLot          = 0.01;     // Lot per posisi
 input int    InpSwingLen     = 3;        // Panjang swing BOS/CHoCH (sama dengan aplikasi)
 input int    InpHistory      = 500;      // Jumlah candle untuk analisa struktur
 input double InpSafetySLPips = 300;      // SL pengaman dalam pips (1 pip = 0.10), 0 = tanpa SL
-input bool   InpStartOn      = false;    // Auto trade langsung aktif saat EA dipasang
-input bool   InpFollowApp    = true;     // Ikuti tombol ON/OFF dari aplikasi
 input long   InpMagic        = 20261029; // Magic number
 input int    InpSlippage     = 30;       // Slippage (points)
 
 #define CMD_FILE    "RecognitoCmd.txt"
 #define STATUS_FILE "RecognitoStatus.txt"
 #define PFX         "RTF_"
+#define ORDER_FILE  "RecognitoOrder.txt"   // order manual dari aplikasi (diklik pengguna)
+#define USER_MAGIC  20261030               // magic order pengguna (bukan robot)
 
 CTrade   trade;
+CTrade   tradeUser;
+string   gLastOrd  = "";
+string   gOrdAck   = "";
 bool     gAuto     = false;
 double   gLotBuy   = 0.01;
 double   gLotSell  = 0.01;
@@ -116,6 +119,12 @@ void ClosePos(int which, string reason)   // which: 1 = BUY, -1 = SELL, 0 = semu
 
 void OpenPos(int dir, string reason)
   {
+   // order robot hanya jalan bila pengguna sendiri mengklik AKTIFKAN ORDER di chart MT5
+   if(!gAuto)
+     {
+      AddLog(StringFormat("Sinyal %s (%s) - TIDAK dibuka: order robot belum diaktifkan pengguna", (dir > 0 ? "BUY" : "SELL"), reason));
+      return;
+     }
    double lot = NormLot(dir > 0 ? gLotBuy : gLotSell);
    double pip = PipSize();
    double price = (dir > 0) ? SymbolInfoDouble(_Symbol, SYMBOL_ASK) : SymbolInfoDouble(_Symbol, SYMBOL_BID);
@@ -274,14 +283,16 @@ void CheckNewBar()
   }
 
 //+------------------------------------------------------------------+
-//| Perintah dari aplikasi                                            |
+//| Order manual dari aplikasi: dikirim hanya saat pengguna menekan    |
+//| EKSEKUSI. Order lebih tua dari 20 detik diabaikan (aman bila EA    |
+//| baru dipasang belakangan).                                         |
 //+------------------------------------------------------------------+
-void ReadCommand(bool initial)
+void ReadOrder(bool initial)
   {
-   if(!FileIsExist(CMD_FILE, FILE_COMMON)) return;
-   int h = FileOpen(CMD_FILE, FILE_READ | FILE_TXT | FILE_ANSI | FILE_COMMON | FILE_SHARE_READ | FILE_SHARE_WRITE);
+   if(!FileIsExist(ORDER_FILE, FILE_COMMON)) return;
+   int h = FileOpen(ORDER_FILE, FILE_READ | FILE_TXT | FILE_ANSI | FILE_COMMON | FILE_SHARE_READ | FILE_SHARE_WRITE);
    if(h == INVALID_HANDLE) return;
-   string id = "", autoV = "", closeV = "", lotB = "", lotS = "";
+   string id = "", side = "", otype = "", lotS = "", priceS = "", tm = "";
    while(!FileIsEnding(h))
      {
       string line = FileReadString(h);
@@ -290,7 +301,81 @@ void ReadCommand(bool initial)
       string k = StringSubstr(line, 0, p), v = StringSubstr(line, p + 1);
       StringTrimLeft(v); StringTrimRight(v);
       if(k == "ID") id = v;
-      else if(k == "AUTO") autoV = v;
+      else if(k == "SIDE") side = v;
+      else if(k == "TYPE") otype = v;
+      else if(k == "LOT") lotS = v;
+      else if(k == "PRICE") priceS = v;
+      else if(k == "TIME") tm = v;
+     }
+   FileClose(h);
+   if(id == "" || id == gLastOrd) return;
+   gLastOrd = id;
+   if(initial) return;   // order yang sudah ada sebelum EA jalan tidak dieksekusi
+   long age = (long)(TimeLocal() - StringToTime(tm));
+   if(age < -5 || age > 20)
+     {
+      gOrdAck = id + ";FAIL;order kedaluwarsa (" + IntegerToString(age) + " detik) - tidak dieksekusi";
+      AddLog("Order pengguna diabaikan: kedaluwarsa");
+      return;
+     }
+   bool buy = (side == "BUY");
+   double lot = NormLot(StringToDouble(lotS));
+   bool ok;
+   string what;
+   if(otype == "PENDING")
+     {
+      double px = NormalizeDouble(StringToDouble(priceS), _Digits);
+      double ask = SymbolInfoDouble(_Symbol, SYMBOL_ASK), bid = SymbolInfoDouble(_Symbol, SYMBOL_BID);
+      if(buy)
+        {
+         if(px < ask) { ok = tradeUser.BuyLimit(lot, px, _Symbol, 0, 0, ORDER_TIME_GTC, 0, "RTF pengguna"); what = "BUY LIMIT"; }
+         else         { ok = tradeUser.BuyStop(lot, px, _Symbol, 0, 0, ORDER_TIME_GTC, 0, "RTF pengguna");  what = "BUY STOP"; }
+        }
+      else
+        {
+         if(px > bid) { ok = tradeUser.SellLimit(lot, px, _Symbol, 0, 0, ORDER_TIME_GTC, 0, "RTF pengguna"); what = "SELL LIMIT"; }
+         else         { ok = tradeUser.SellStop(lot, px, _Symbol, 0, 0, ORDER_TIME_GTC, 0, "RTF pengguna");  what = "SELL STOP"; }
+        }
+      what = StringFormat("%s %.2f %s @ %s", what, lot, _Symbol, DoubleToString(px, _Digits));
+     }
+   else
+     {
+      if(buy) ok = tradeUser.Buy(lot, _Symbol, 0, 0, 0, "RTF pengguna");
+      else    ok = tradeUser.Sell(lot, _Symbol, 0, 0, 0, "RTF pengguna");
+      what = StringFormat("%s %.2f %s harga pasar", (buy ? "BUY" : "SELL"), lot, _Symbol);
+     }
+   uint rc = tradeUser.ResultRetcode();
+   if(ok && (rc == TRADE_RETCODE_DONE || rc == TRADE_RETCODE_PLACED || rc == TRADE_RETCODE_DONE_PARTIAL))
+     {
+      string res = what + (otype == "PENDING" ? " DIPASANG" : " DIBUKA @ " + DoubleToString(tradeUser.ResultPrice(), _Digits));
+      gOrdAck = id + ";OK;" + res;
+      AddLog("ORDER PENGGUNA " + res);
+     }
+   else
+     {
+      gOrdAck = id + ";FAIL;" + what + ": " + tradeUser.ResultRetcodeDescription();
+      AddLog("GAGAL order pengguna " + what + ": " + tradeUser.ResultRetcodeDescription());
+     }
+  }
+
+//+------------------------------------------------------------------+
+//| Perintah dari aplikasi                                            |
+//+------------------------------------------------------------------+
+void ReadCommand(bool initial)
+  {
+   if(!FileIsExist(CMD_FILE, FILE_COMMON)) return;
+   int h = FileOpen(CMD_FILE, FILE_READ | FILE_TXT | FILE_ANSI | FILE_COMMON | FILE_SHARE_READ | FILE_SHARE_WRITE);
+   if(h == INVALID_HANDLE) return;
+   string id = "", stopV = "", closeV = "", lotB = "", lotS = "";
+   while(!FileIsEnding(h))
+     {
+      string line = FileReadString(h);
+      int p = StringFind(line, "=");
+      if(p < 0) continue;
+      string k = StringSubstr(line, 0, p), v = StringSubstr(line, p + 1);
+      StringTrimLeft(v); StringTrimRight(v);
+      if(k == "ID") id = v;
+      else if(k == "STOP") stopV = v;
       else if(k == "CLOSEALL") closeV = v;
       else if(k == "LOTBUY") lotB = v;
       else if(k == "LOTSELL") lotS = v;
@@ -298,15 +383,12 @@ void ReadCommand(bool initial)
    FileClose(h);
    if(id == "" || id == gLastCmd) return;
    gLastCmd = id;
-   if(InpFollowApp && autoV != "")
+   // aplikasi hanya boleh MENGHENTIKAN order robot (STOP FER), tidak bisa mengaktifkan
+   if(!initial && stopV == "1" && gAuto)
      {
-      bool v = (autoV == "1");
-      if(v != gAuto)
-        {
-         gAuto = v;
-         AddLog(gAuto ? "Auto trade DIAKTIFKAN dari aplikasi" : "Auto trade DIHENTIKAN dari aplikasi");
-         UpdateButtons();
-        }
+      gAuto = false;
+      AddLog("Order robot DIHENTIKAN dari aplikasi (STOP FER)");
+      UpdateButtons();
      }
    double lb = StringToDouble(lotB), ls = StringToDouble(lotS);
    if(lb > 0 && MathAbs(lb - gLotBuy) > 1e-9)
@@ -356,6 +438,9 @@ void WriteStatus(bool alive)
    FileWriteString(h, "SYMBOL=" + _Symbol + "\r\n");
    FileWriteString(h, "TF=" + tf + "\r\n");
    FileWriteString(h, "PRICE=" + DoubleToString(SymbolInfoDouble(_Symbol, SYMBOL_BID), _Digits) + "\r\n");
+   FileWriteString(h, "ASK=" + DoubleToString(SymbolInfoDouble(_Symbol, SYMBOL_ASK), _Digits) + "\r\n");
+   FileWriteString(h, "DIGITS=" + IntegerToString(_Digits) + "\r\n");
+   FileWriteString(h, "ORDACK=" + gOrdAck + "\r\n");
    FileWriteString(h, "AUTO=" + (gAuto ? "1" : "0") + "\r\n");
    FileWriteString(h, "LOTBUY=" + DoubleToString(gLotBuy, 2) + "\r\n");
    FileWriteString(h, "LOTSELL=" + DoubleToString(gLotSell, 2) + "\r\n");
@@ -366,6 +451,40 @@ void WriteStatus(bool alive)
    FileWriteString(h, "POS_SELL=" + IntegerToString(CountPos(POSITION_TYPE_SELL)) + "\r\n");
    FileWriteString(h, "PROFIT=" + DoubleToString(prof, 2) + "\r\n");
    FileWriteString(h, pos);
+   // semua posisi & pending order akun (termasuk order manual / dari web terminal)
+   for(int i = PositionsTotal() - 1; i >= 0; i--)
+     {
+      ulong tk = PositionGetTicket(i);
+      if(tk == 0) continue;
+      string sym = PositionGetString(POSITION_SYMBOL);
+      int dg = (int)SymbolInfoInteger(sym, SYMBOL_DIGITS);
+      FileWriteString(h, StringFormat("ACPOS=%I64u;%s;%.2f;%s;%s;%s;%s;%s;%.2f;%s\r\n", tk,
+             ((ENUM_POSITION_TYPE)PositionGetInteger(POSITION_TYPE) == POSITION_TYPE_BUY ? "BUY" : "SELL"),
+             PositionGetDouble(POSITION_VOLUME), sym,
+             DoubleToString(PositionGetDouble(POSITION_PRICE_OPEN), dg),
+             DoubleToString(PositionGetDouble(POSITION_PRICE_CURRENT), dg),
+             DoubleToString(PositionGetDouble(POSITION_SL), dg),
+             DoubleToString(PositionGetDouble(POSITION_TP), dg),
+             PositionGetDouble(POSITION_PROFIT) + PositionGetDouble(POSITION_SWAP),
+             (PositionGetInteger(POSITION_MAGIC) == InpMagic ? "EA" :
+              PositionGetInteger(POSITION_MAGIC) == USER_MAGIC ? "APLIKASI" : "MANUAL")));
+     }
+   for(int i = OrdersTotal() - 1; i >= 0; i--)
+     {
+      ulong tk = OrderGetTicket(i);
+      if(tk == 0) continue;
+      string sym = OrderGetString(ORDER_SYMBOL);
+      int dg = (int)SymbolInfoInteger(sym, SYMBOL_DIGITS);
+      string ot = EnumToString((ENUM_ORDER_TYPE)OrderGetInteger(ORDER_TYPE));
+      StringReplace(ot, "ORDER_TYPE_", "");
+      StringReplace(ot, "_", " ");
+      FileWriteString(h, StringFormat("ACORD=%I64u;%s;%.2f;%s;%s;%s;%s;%s\r\n", tk, ot,
+             OrderGetDouble(ORDER_VOLUME_CURRENT), sym,
+             DoubleToString(OrderGetDouble(ORDER_PRICE_OPEN), dg),
+             DoubleToString(SymbolInfoDouble(sym, SYMBOL_BID), dg),
+             DoubleToString(OrderGetDouble(ORDER_SL), dg),
+             DoubleToString(OrderGetDouble(ORDER_TP), dg)));
+     }
    for(int i = 0; i < ArraySize(gLog); i++) FileWriteString(h, "LOG=" + gLog[i] + "\r\n");
    FileClose(h);
   }
@@ -391,7 +510,7 @@ void MakeButton(string name, string text, int x, int y, int w, color bg, color f
 
 void UpdateButtons()
   {
-   MakeButton(PFX + "AUTO", gAuto ? "AUTO TRADE: ON" : "AUTO TRADE: OFF", 10, 30, 150,
+   MakeButton(PFX + "AUTO", gAuto ? "ORDER AKTIF (klik = stop)" : "AKTIFKAN ORDER", 10, 30, 150,
               gAuto ? clrLimeGreen : clrDimGray, clrWhite);
    MakeButton(PFX + "CLOSE", "TUTUP SEMUA", 166, 30, 110, clrCrimson, clrWhite);
    // kiri bawah: STOP FER + lot aktif
@@ -407,10 +526,14 @@ int OnInit()
    trade.SetExpertMagicNumber(InpMagic);
    trade.SetDeviationInPoints(InpSlippage);
    trade.SetTypeFillingBySymbol(_Symbol);
-   gAuto = InpStartOn;
+   tradeUser.SetExpertMagicNumber(USER_MAGIC);
+   tradeUser.SetDeviationInPoints(InpSlippage);
+   tradeUser.SetTypeFillingBySymbol(_Symbol);
+   gAuto = false;   // selalu mati saat EA dipasang: hanya pengguna yang mengaktifkan
    gLotBuy = NormLot(InpLot);
    gLotSell = NormLot(InpLot);
    ReadCommand(true);
+   ReadOrder(true);
    AddLog("EA Recognito aktif di " + _Symbol + " " + EnumToString(_Period) + (gAuto ? " (auto ON)" : " (auto OFF)"));
    if(!TerminalInfoInteger(TERMINAL_TRADE_ALLOWED))
       AddLog("PERINGATAN: tombol Algo Trading di MT5 masih MATI");
@@ -438,9 +561,10 @@ void OnTick()
 void OnTimer()
   {
    ReadCommand(false);
+   ReadOrder(false);
    CheckNewBar();
    WriteStatus(true);
-   Comment(StringFormat("Recognito Trading Fernanda\nAuto trade: %s   Tren: %s\nBUY: %d   SELL: %d\nEvent terakhir: %s",
+   Comment(StringFormat("Fernanda Trading Recognito\nAuto trade: %s   Tren: %s\nBUY: %d   SELL: %d\nEvent terakhir: %s",
            (gAuto ? "ON" : "OFF"), (gTrend > 0 ? "BULLISH" : gTrend < 0 ? "BEARISH" : "-"),
            CountPos(POSITION_TYPE_BUY), CountPos(POSITION_TYPE_SELL), gLastEvt));
   }
@@ -450,8 +574,19 @@ void OnChartEvent(const int id, const long &lparam, const double &dparam, const 
    if(id != CHARTEVENT_OBJECT_CLICK) return;
    if(sparam == PFX + "AUTO")
      {
-      gAuto = !gAuto;
-      AddLog(gAuto ? "Auto trade DIAKTIFKAN dari MT5" : "Auto trade DIHENTIKAN dari MT5");
+      if(!gAuto)
+        {
+         // aktif hanya atas perintah pengguna, dengan konfirmasi
+         string msg = StringFormat("Aktifkan ORDER ROBOT di %s?\n\nEA akan membuka posisi NYATA:\n"
+                                   "- BUY %.2f saat BuE / CHoCH naik (tutup di BBC ke-3)\n"
+                                   "- SELL %.2f saat BeE / CHoCH turun (tutup di BWS ke-3)\n\n"
+                                   "Klik tombol ini lagi kapan saja untuk menghentikan.", _Symbol, gLotBuy, gLotSell);
+         if(MessageBox(msg, "Fernanda Trading Recognito", MB_YESNO | MB_ICONWARNING) == IDYES)
+            gAuto = true;
+        }
+      else
+         gAuto = false;
+      AddLog(gAuto ? "Order robot DIAKTIFKAN oleh pengguna di MT5" : "Order robot DIHENTIKAN oleh pengguna di MT5");
       UpdateButtons();
       WriteStatus(true);
      }

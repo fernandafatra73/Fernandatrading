@@ -1,4 +1,4 @@
-RECOGNITO TRADING FERNANDA
+FERNANDA TRADING RECOGNITO
 Created By: Fernanda Fatria Fatra,SST.MM
 ==========================================
 
@@ -29,20 +29,25 @@ ALARM
 - Berita high-impact (FOMC, NFP, CPI, dll): 5 menit sebelum & saat rilis.
 - Tambah jadwal berita sendiri di events.txt (format ada di dalam file).
 
-AUTO TRADE MT5 EXNESS (tab MT5)
-- Aturan: BUY 0.01 saat Bullish Engulfing (BuE) atau CHoCH bullish (tren turun -> naik).
-          BUY ditutup di candle ke-3 Three Black Crows (BBC / 3BC), harga pasar.
-          SELL 0.01 saat Bearish Engulfing (BeE) atau CHoCH bearish (tren naik -> turun).
-          SELL ditutup di candle ke-3 Three White Soldiers (BWS / 3WS), harga pasar.
-          Maksimal 1 BUY dan 1 SELL terbuka; setelah tertutup berulang lagi.
-- Sinyal dihitung EA RecognitoBridge dari candle MT5 Exness sendiri (candle tertutup,
-  timeframe chart tempat EA dipasang).
-- Pasang: tab MT5 > Pasang EA ke MT5 > di MT5 Refresh / Compile (F7) > seret EA ke
-  chart XAUUSD > izinkan Algo Trading.
-- Hentikan kapan saja: tombol AUTO TRADE (aplikasi) atau tombol di chart MT5.
-  TUTUP SEMUA POSISI menutup semua posisi milik EA.
-- SL pengaman default 300 pips (input EA, 0 = tanpa SL).
-- UJI DULU DI AKUN DEMO.
+MT5 EXNESS (tab MT5) - ORDER ROBOT ATAS PERINTAH PENGGUNA
+- Saat EA RecognitoBridge dipasang, order robot SELALU MATI (tidak beli / jual sendiri).
+- Mengaktifkan HANYA oleh pengguna: klik tombol AKTIFKAN ORDER di chart MT5, lalu Yes.
+  Saat aktif: BUY saat BuE / CHoCH naik (tutup di BBC ke-3), SELL saat BeE / CHoCH turun
+  (tutup di BWS ke-3).
+- Menghentikan: klik tombol itu lagi di MT5, atau STOP FER / ORDER ROBOT di aplikasi.
+  Aplikasi tidak bisa mengaktifkan, hanya menghentikan.
+- Status di bar bawah aplikasi: ORDER ROBOT: MATI / AKTIF.
+- KONEKSI MT5 (sebelah TRADE WILL): hijau = terhubung, merah = belum. Klik untuk cek:
+  "Sudah terhubung Fatra73" / "Belom terhubung lagi ngambek Ho".
+- OPEN (order manual pengguna): klik -> panel BELI / JUAL, bar persentase beli / jual
+  (volume 50 candle terakhir), lalu OTOMATIS (harga pasar, langsung eksekusi) atau
+  PENDING (harga digeser dengan slider / tombol - +, otomatis BUY/SELL LIMIT atau STOP),
+  pilihan lot, dan tombol EKSEKUSI (selalu dengan konfirmasi). Order tanpa SL / TP.
+  Order dikirim lewat EA; order yang lebih tua dari 20 detik tidak dieksekusi.
+- UNTUNG / RUGI MT5 (di sebelah tombol TRADE WILL): total plus / minus semua posisi
+  terbuka akun, termasuk order manual / dari web terminal. Hijau = untung, merah = rugi.
+- Syarat: MT5 desktop terbuka & login, EA RecognitoBridge dipasang di salah satu chart.
+  Pasang: tab MT5 > Pasang EA ke MT5 > di MT5 Refresh / Compile (F7) > seret EA ke chart.
 
 CAPTURE GRAFIK (tab Capture, sebelah MT5)
 - Otomatis per blok 4 jam WIB, di-capture saat blok berakhir:
@@ -51,6 +56,23 @@ CAPTURE GRAFIK (tab Capture, sebelah MT5)
 - Ditambah capture otomatis setiap pergantian sesi pasar (05, 07, 14, 16, 19, 23, 04 WIB).
 - Gambar (JPG) disimpan di folder "Capture" bersama nama grafik, jam, harga, sinyal
   dan pesan sesi; daftar ada di tabel. CAPTURE SEKARANG = manual, HAPUS / HAPUS SEMUA.
+
+REKAM VIDEO LAYAR (tab Capture)
+- Merekam semua aktivitas di layar ke MP4 (H.264, 1280 lebar, 5 fps) selama aplikasi
+  berjalan. Disimpan di folder "Capture\Video", file baru tiap 15 menit.
+- Batas folder 3 GB: video terlama dihapus otomatis. Rekaman dijeda bila sisa disk < 1 GB.
+- REKAM VIDEO ON/OFF disimpan (Capture\video.ini).
+- NYALA SAAT WINDOWS: ON = aplikasi (dan perekam) otomatis jalan saat Windows menyala,
+  jadi rekaman berjalan selama komputer aktif.
+- File yang sedang direkam baru bisa diputar setelah ditutup (tiap 15 menit, saat REKAM
+  dimatikan, atau saat aplikasi ditutup). "Putar terakhir" membuka video terakhir yang selesai.
+
+KALKULATOR
+- Saldo/modal: pilih 100, 200, ... 1000 atau ketik langsung.
+- Lot: standar 0.01, tombol - / + menambah/mengurangi 0.01, "Rekom." = lot rekomendasi.
+- MODAL HABIS DI HARGA BERAPA: dengan modal & lot yang dipilih, tampil jarak pips dan
+  harga saat modal habis untuk BUY dan SELL, plus tabel lot 0.01 - 1.00.
+  Rumus: habis = modal / (lot x 100). Belum termasuk spread, swap & komisi.
 
 PESAN WAKTU TRADING (bar di bawah grafik, jam WIB)
 - Sydney 05:00-14:00, Tokyo 07:00-16:00, London 14:00-23:00, New York 19:00-04:00.
