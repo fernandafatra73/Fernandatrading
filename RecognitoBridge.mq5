@@ -510,8 +510,7 @@ void MakeButton(string name, string text, int x, int y, int w, color bg, color f
 
 void UpdateButtons()
   {
-   MakeButton(PFX + "AUTO", gAuto ? "ORDER AKTIF (klik = stop)" : "AKTIFKAN ORDER", 10, 30, 150,
-              gAuto ? clrLimeGreen : clrDimGray, clrWhite);
+   MakeButton(PFX + "AUTO", "ROBOT NONAKTIF", 10, 30, 150, clrDimGray, clrWhite);
    MakeButton(PFX + "CLOSE", "TUTUP SEMUA", 166, 30, 110, clrCrimson, clrWhite);
    // kiri bawah: STOP FER + lot aktif
    MakeButton(PFX + "STOP", "STOP FER", 10, 40, 100, clrRed, clrWhite, CORNER_LEFT_LOWER);
@@ -574,19 +573,12 @@ void OnChartEvent(const int id, const long &lparam, const double &dparam, const 
    if(id != CHARTEVENT_OBJECT_CLICK) return;
    if(sparam == PFX + "AUTO")
      {
-      if(!gAuto)
-        {
-         // aktif hanya atas perintah pengguna, dengan konfirmasi
-         string msg = StringFormat("Aktifkan ORDER ROBOT di %s?\n\nEA akan membuka posisi NYATA:\n"
-                                   "- BUY %.2f saat BuE / CHoCH naik (tutup di BBC ke-3)\n"
-                                   "- SELL %.2f saat BeE / CHoCH turun (tutup di BWS ke-3)\n\n"
-                                   "Klik tombol ini lagi kapan saja untuk menghentikan.", _Symbol, gLotBuy, gLotSell);
-         if(MessageBox(msg, "Fernanda Trading Recognito", MB_YESNO | MB_ICONWARNING) == IDYES)
-            gAuto = true;
-        }
-      else
-         gAuto = false;
-      AddLog(gAuto ? "Order robot DIAKTIFKAN oleh pengguna di MT5" : "Order robot DIHENTIKAN oleh pengguna di MT5");
+      // order robot dinonaktifkan permanen: yang trading hanya pengguna (OPEN / EKSEKUSI di aplikasi)
+      gAuto = false;
+      MessageBox("Order robot dinonaktifkan.\n\nEA hanya menghubungkan aplikasi dengan MT5.\n"
+                 "Order hanya dari pengguna lewat tombol OPEN / EKSEKUSI di aplikasi.",
+                 "Fernanda Trading Recognito", MB_OK | MB_ICONINFORMATION);
+      AddLog("Order robot dinonaktifkan - hanya order pengguna");
       UpdateButtons();
       WriteStatus(true);
      }

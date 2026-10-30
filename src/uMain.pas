@@ -62,7 +62,7 @@ type
     FOrdPending, FPendSync, FMT5Old, FOrdMoved: Boolean;
     FFrontTicks: Integer;
     { tab Edukasi: pilihan Edukasi / Running Text + teks berjalan di bawah grafik }
-    cbEduMode, cbRunSpeed: TComboBox;
+    cbEduMode, cbRunSpeed, cbChartBg: TComboBox;
     pnlEduRun, pnlRun: TPanel;
     memRun: TMemo;
     pbRun: TPaintBox;
@@ -167,6 +167,7 @@ type
     procedure OnTF(Sender: TObject);
     procedure OnInd(Sender: TObject);
     procedure OnZoom(Sender: TObject);
+    procedure OnRefreshSig(Sender: TObject);
     procedure OnGold(Sender: TObject);
     procedure OnLink(Sender: TObject);
     procedure BuildMT5(P: TPanel);
@@ -243,6 +244,7 @@ type
     procedure ForceFront;
     procedure BuildEduTab(P: TPanel);
     procedure OnEduMode(Sender: TObject);
+    procedure OnChartBg(Sender: TObject);
     procedure OnRunChange(Sender: TObject);
     procedure OnRunClear(Sender: TObject);
     procedure OnRunShow(Sender: TObject);
@@ -586,6 +588,15 @@ begin
   Chart.Parent := pnlCenter;
   Chart.Align := alClient;
   Chart.LocalOffH := LocalOffsetH;
+  if FileExists(ExtractFilePath(ParamStr(0)) + 'chartbg.ini') then
+    with TStringList.Create do
+    try
+      LoadFromFile(ExtractFilePath(ParamStr(0)) + 'chartbg.ini');
+      cbChartBg.ItemIndex := EnsureRange(StrToIntDef(Values['WARNA'], 0), 0, High(ChartBgNames));
+    finally
+      Free;
+    end;
+  Chart.SetBg(cbChartBg.ItemIndex);
   BuildCapView;
   BuildOrderPanel;
 
@@ -630,10 +641,14 @@ begin
   MakeBtn(pnlInd, '+', 644, 4, 26, 24, OnZoom, 1);
   MakeBtn(pnlInd, '-', 672, 4, 26, 24, OnZoom, 2);
   MakeBtn(pnlInd, 'Reset', 700, 4, 44, 24, OnZoom, 3);
-  btnAlarm := MakeBtn(pnlInd, 'ALARM 0,5 mnt: ON', 756, 4, 120, 24, OnAlarmBtn);
+  with MakeBtn(pnlInd, 'Refresh Sinyal', 746, 4, 92, 24, OnRefreshSig) do
+  begin
+    Bg := clrBlue; Fg := clWhite; Bold := True;
+  end;
+  btnAlarm := MakeBtn(pnlInd, 'ALARM 0,5 mnt: ON', 850, 4, 120, 24, OnAlarmBtn);
   btnAlarm.BgDown := clrRed; btnAlarm.FgDown := clWhite;
   btnAlarm.Down := True;
-  lblSignal := MakeLabel(pnlInd, 'SINYAL: memuat...', 890, 6, clrYellow, 10, True);
+  lblSignal := MakeLabel(pnlInd, 'SINYAL: memuat...', 984, 6, clrYellow, 10, True);
   OnInd(nil);
 end;
 
@@ -1546,6 +1561,15 @@ begin
       lblMT5PL.Font.Color := DirCol(Sign(tot));
     end;
     lblMT5PLCap.Caption := 'UNTUNG / RUGI MT5' + Sx(npos > 0, Format(' (%d)', [npos]), '');
+    { salinan besar di kanan bawah grafik, hanya bila ada posisi terbuka }
+    Chart.PLText := Sx(FMT5Alive and (npos > 0), lblMT5PL.Caption, '');
+    Chart.PLCap := lblMT5PLCap.Caption;
+    Chart.PLColor := lblMT5PL.Font.Color;
+    { modal kuning di kiri bawah grafik = equity MT5 (balance + untung / rugi posisi terbuka) }
+    if FMT5Alive and (PF(sl.Values['EQUITY']) > 0) then
+      Chart.ModalText := FormatFloat('#,##0.00', PF(sl.Values['EQUITY'])) + ' ' + sl.Values['CURRENCY']
+    else
+      Chart.ModalText := '';
     btnConn.Bg := Cx(FMT5Alive, clrGreenDim, clrRedDim);
     btnConn.Invalidate;
 
@@ -2213,9 +2237,9 @@ end;
 { ---------------- Tab Edukasi: Edukasi / Running Text ---------------- }
 
 procedure TMainForm.BuildEduTab(P: TPanel);
-var top, f: TPanel;
+var top, f: TPanel; i: Integer;
 begin
-  top := MakePanel(P, alTop, 34, clrPanel);
+  top := MakePanel(P, alTop, 62, clrPanel);
   MakeLabel(top, 'Tampilkan:', 4, 9, clrMuted, 9, True);
   cbEduMode := TComboBox.Create(Self);
   cbEduMode.Parent := top;
@@ -2225,6 +2249,17 @@ begin
   cbEduMode.Items.CommaText := '"1. Edukasi","2. Running Text"';
   cbEduMode.ItemIndex := 0;
   cbEduMode.OnChange := OnEduMode;
+
+  { pilihan warna belakang grafik di halaman grafik }
+  MakeLabel(top, 'Pilihan warna belakang grafik:', 4, 37, clrMuted, 9, True);
+  cbChartBg := TComboBox.Create(Self);
+  cbChartBg.Parent := top;
+  cbChartBg.Style := csDropDownList;
+  cbChartBg.SetBounds(196, 33, 180, 22);
+  cbChartBg.Color := clrPanel2; cbChartBg.Font.Color := clrText;
+  for i := 0 to High(ChartBgNames) do cbChartBg.Items.Add(ChartBgNames[i]);
+  cbChartBg.ItemIndex := 0;
+  cbChartBg.OnChange := OnChartBg;
 
   reEdu := NewRE(P, False);
 
@@ -2277,6 +2312,22 @@ begin
   end;
   FRunText := #0;   { paksa hitung ulang }
   UpdateRunText;
+end;
+
+{ warna belakang grafik: langsung dipakai & disimpan di chartbg.ini }
+procedure TMainForm.OnChartBg(Sender: TObject);
+begin
+  Chart.SetBg(cbChartBg.ItemIndex);
+  try
+    with TStringList.Create do
+    try
+      Values['WARNA'] := IntToStr(cbChartBg.ItemIndex);
+      SaveToFile(ExtractFilePath(ParamStr(0)) + 'chartbg.ini');
+    finally
+      Free;
+    end;
+  except
+  end;
 end;
 
 procedure TMainForm.OnEduMode(Sender: TObject);
@@ -3671,6 +3722,16 @@ begin
     2: Chart.ZoomOut;
   else Chart.ResetView;
   end;
+end;
+
+{ muat ulang candle grafik + multi-TF, lalu sinyal dihitung ulang (posisi grafik tetap) }
+procedure TMainForm.OnRefreshSig(Sender: TObject);
+begin
+  lblSignal.Caption := 'SINYAL: menghitung ulang...';
+  lblSignal.Font.Color := clrYellow;
+  AddLog('Refresh sinyal ' + FSym + ' ' + TFLabels[FTF] + ' oleh pengguna.', clrMuted);
+  LoadMain;
+  LoadMTF;
 end;
 
 procedure TMainForm.OnLink(Sender: TObject);

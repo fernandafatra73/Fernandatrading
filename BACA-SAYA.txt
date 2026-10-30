@@ -22,6 +22,7 @@ KONTROL GRAFIK
 - Ctrl + scroll            : zoom harga
 - Drag sumbu waktu (bawah) : rapat/renggang candle
 - Klik ganda               : kembali ke skala harga otomatis
+- Refresh Sinyal (sebelah Reset): muat ulang data candle & hitung ulang sinyal sekarang
 
 ALARM
 - Sinyal BUY/SELL kuat dicek setiap 0,5 menit (30 detik) - tombol ALARM untuk ON/OFF.
@@ -30,13 +31,11 @@ ALARM
 - Tambah jadwal berita sendiri di events.txt (format ada di dalam file).
 
 MT5 EXNESS (tab MT5) - ORDER ROBOT ATAS PERINTAH PENGGUNA
-- Saat EA RecognitoBridge dipasang, order robot SELALU MATI (tidak beli / jual sendiri).
-- Mengaktifkan HANYA oleh pengguna: klik tombol AKTIFKAN ORDER di chart MT5, lalu Yes.
-  Saat aktif: BUY saat BuE / CHoCH naik (tutup di BBC ke-3), SELL saat BeE / CHoCH turun
-  (tutup di BWS ke-3).
-- Menghentikan: klik tombol itu lagi di MT5, atau STOP FER / ORDER ROBOT di aplikasi.
-  Aplikasi tidak bisa mengaktifkan, hanya menghentikan.
-- Status di bar bawah aplikasi: ORDER ROBOT: MATI / AKTIF.
+- Order robot DINONAKTIFKAN PERMANEN: EA tidak pernah beli / jual sendiri. Tombol di chart
+  MT5 bertuliskan ROBOT NONAKTIF. EA hanya menghubungkan aplikasi dengan MT5.
+- Yang trading hanya pengguna (OPEN / EKSEKUSI di aplikasi, atau langsung di MT5).
+  Algo Trading di MT5 tetap harus ON agar order dari aplikasi bisa dieksekusi.
+- Status di bar bawah aplikasi: ORDER ROBOT: MATI.
 - KONEKSI MT5 (sebelah TRADE WILL): hijau = terhubung, merah = belum. Klik untuk cek:
   "Sudah terhubung Fatra73" / "Belom terhubung lagi ngambek Ho".
 - OPEN (order manual pengguna): klik -> panel BELI / JUAL, bar persentase beli / jual
@@ -46,6 +45,9 @@ MT5 EXNESS (tab MT5) - ORDER ROBOT ATAS PERINTAH PENGGUNA
   Order dikirim lewat EA; order yang lebih tua dari 20 detik tidak dieksekusi.
 - UNTUNG / RUGI MT5 (di sebelah tombol TRADE WILL): total plus / minus semua posisi
   terbuka akun, termasuk order manual / dari web terminal. Hijau = untung, merah = rugi.
+  Juga tampil besar (4x) di kanan bawah grafik selama ada posisi terbuka.
+- MODAL (kuning, kiri bawah grafik): equity MT5 = balance + untung / rugi posisi terbuka.
+  Berkurang saat minus, bertambah saat plus.
 - Syarat: MT5 desktop terbuka & login, EA RecognitoBridge dipasang di salah satu chart.
   Pasang: tab MT5 > Pasang EA ke MT5 > di MT5 Refresh / Compile (F7) > seret EA ke chart.
 
@@ -88,6 +90,8 @@ KAMERA CCTV PH (tombol KONEKSI MT5 > 2. Kamera CCTV PH)
 
 EDUKASI & RUNNING TEXT (tab Edukasi)
 - Dropdown "Tampilkan": 1. Edukasi (materi) atau 2. Running Text.
+- Dropdown "Pilihan warna belakang grafik": Standar (warna sekarang), Biru, Hijau, Putih,
+  Ungu, Abu-abu. Langsung berubah di grafik dan tersimpan (chartbg.ini).
 - Running Text: tulis teks di kotak, langsung berjalan pelan di bawah grafik.
   Kosong = bar tidak tampil. Kecepatan Pelan / Sedang / Cepat. Tersimpan di runningtext.txt.
   Tombol SEMBUNYIKAN / TAMPILKAN: sembunyikan teks berjalan tanpa menghapus teksnya.

@@ -66,6 +66,10 @@ type
     PendPrice: Double;   { garis hijau harga pending dari panel OPEN (0 = tidak ada) }
     PendLbl: string;
     PosLines: TPosLines;   { garis kuning posisi BUY / SELL yang sedang terbuka }
+    PLText, PLCap: string;   { untung / rugi MT5 besar di kanan bawah grafik ('' = tidak tampil) }
+    PLColor: TColor;
+    ModalText: string;   { modal / balance MT5, kuning di kiri bawah grafik ('' = tidak tampil) }
+    BgColor, GridColor, BandColor, TitleColor, FvgBuyColor, FvgSellColor: TColor;   { warna belakang grafik (tab Edukasi) }
     constructor Create(AOwner: TComponent); override;
     destructor Destroy; override;
     procedure Wheel(Delta: Integer; Shift: TShiftState);
@@ -73,7 +77,11 @@ type
     procedure ZoomOut;
     procedure ResetView;
     procedure Snapshot(B: TBitmap);
+    procedure SetBg(Idx: Integer);
   end;
+
+const
+  ChartBgNames: array[0..5] of string = ('Standar (warna sekarang)', 'Biru', 'Hijau', 'Putih', 'Ungu', 'Abu-abu');
 
 var
   MAColors: array[0..5] of TColor;
@@ -95,6 +103,26 @@ begin
   ShowBB := True; ShowSR := True; ShowSMC := True; ShowFVG := True; ShowPat := True; ShowVol := True;
   Digits := 2; TFSec := 3600;
   Cursor := crCross;
+  SetBg(0);
+end;
+
+{ warna belakang, grid, area Bollinger & judul untuk tiap pilihan ChartBgNames }
+procedure TChartView.SetBg(Idx: Integer);
+begin
+  TitleColor := clrYellow; FvgBuyColor := RGB(10, 45, 36); FvgSellColor := RGB(50, 18, 26);
+  case Idx of
+    1: begin BgColor := RGB(10, 22, 48); GridColor := RGB(24, 40, 72); BandColor := RGB(22, 30, 66); end;
+    2: begin BgColor := RGB(8, 32, 22); GridColor := RGB(20, 52, 38); BandColor := RGB(18, 40, 40); end;
+    3: begin
+         BgColor := RGB(255, 255, 255); GridColor := RGB(228, 231, 236); BandColor := RGB(238, 232, 250);
+         TitleColor := RGB(170, 120, 0); FvgBuyColor := RGB(205, 240, 225); FvgSellColor := RGB(250, 215, 220);
+       end;
+    4: begin BgColor := RGB(30, 14, 44); GridColor := RGB(48, 30, 66); BandColor := RGB(44, 24, 64); end;
+    5: begin BgColor := RGB(44, 48, 54); GridColor := RGB(60, 65, 72); BandColor := RGB(54, 52, 68); end;
+  else
+    BgColor := clrBg; GridColor := RGB(26, 30, 36); BandColor := RGB(20, 17, 33);
+  end;
+  Invalidate;
 end;
 
 destructor TChartView.Destroy;
@@ -230,12 +258,13 @@ var
   cv: TCanvas; n, i, i0, i1, x, y, yo, yc, bw, k, step, w, h: Integer;
   p, ps, vmax, last: Double; col: TColor; dt: TDateTime; s: string;
   pts: array of TPoint; hv: Integer; R: TRect; pm: TPatMark;
+  tagY: array[0..5] of Integer; nTag, j, m: Integer; moved: Boolean;
 begin
   w := ClientWidth; h := ClientHeight;
   if (FBmp.Width <> w) or (FBmp.Height <> h) then begin FBmp.Width := w; FBmp.Height := h; end;
   cv := FBmp.Canvas;
   cv.Font.Name := 'Segoe UI'; cv.Font.Size := 8; cv.Font.Style := [];
-  cv.Brush.Style := bsSolid; cv.Brush.Color := clrBg;
+  cv.Brush.Style := bsSolid; cv.Brush.Color := BgColor;
   cv.FillRect(Rect(0, 0, w, h));
   n := Length(C);
 
@@ -273,7 +302,7 @@ begin
   { grid harga }
   ps := NiceStep((FHi - FLo) / Max(2, (FPlot.Bottom - FPlot.Top) / 55));
   p := Ceil(FLo / ps) * ps;
-  cv.Pen.Color := RGB(26, 30, 36);
+  cv.Pen.Color := GridColor;
   cv.Brush.Style := bsClear;
   while p < FHi do
   begin
@@ -289,7 +318,7 @@ begin
 
   { grid & label waktu }
   step := Max(1, Ceil(95 / FBarW));
-  cv.Pen.Color := RGB(26, 30, 36);
+  cv.Pen.Color := GridColor;
   for i := i0 to i1 do
     if (C[i].T div 1000 div TFSec) mod step = 0 then
     begin
@@ -313,8 +342,8 @@ begin
         if EndIdx = -1 then x := FPlot.Right else x := XOf(EndIdx);
         R := Rect(XOf(StartIdx), YOf(Top), x, YOf(Bot));
         if R.Right < 0 then Continue;
-        if Dir = 1 then begin cv.Brush.Color := RGB(10, 45, 36); cv.Pen.Color := RGB(14, 110, 75); end
-        else begin cv.Brush.Color := RGB(50, 18, 26); cv.Pen.Color := RGB(140, 40, 55); end;
+        if Dir = 1 then begin cv.Brush.Color := FvgBuyColor; cv.Pen.Color := RGB(14, 110, 75); end
+        else begin cv.Brush.Color := FvgSellColor; cv.Pen.Color := RGB(140, 40, 55); end;
         cv.Brush.Style := bsSolid;
         cv.Rectangle(R.Left, R.Top, R.Right, R.Bottom + 1);
         cv.Brush.Style := bsClear;
@@ -334,7 +363,7 @@ begin
       if BBL[i] > 0 then begin SetLength(pts, Length(pts) + 1); pts[High(pts)] := Point(XOf(i), YOf(BBL[i])); end;
     if Length(pts) > 3 then
     begin
-      cv.Brush.Style := bsSolid; cv.Brush.Color := RGB(20, 17, 33); cv.Pen.Color := RGB(20, 17, 33);
+      cv.Brush.Style := bsSolid; cv.Brush.Color := BandColor; cv.Pen.Color := BandColor;
       cv.Polygon(pts);
     end;
     DrawLine(cv, BBU, i0, i1, RGB(149, 117, 205), 1);
@@ -548,10 +577,61 @@ begin
     cv.TextOut(R.Left + 4, R.Top + 3, s);
   end;
 
+  { untung / rugi MT5 di kanan bawah area harga, 4x ukuran label atas }
+  if PLText <> '' then
+  begin
+    cv.Brush.Style := bsClear;
+    cv.Font.Size := 44; cv.Font.Style := [fsBold]; cv.Font.Color := PLColor;
+    x := FPlot.Right - cv.TextWidth(PLText) - 12;
+    y := FPlot.Bottom - cv.TextHeight(PLText) - 4;
+    cv.TextOut(x, y, PLText);
+    cv.Font.Size := 9; cv.Font.Color := clrMuted;
+    cv.TextOut(FPlot.Right - cv.TextWidth(PLCap) - 14, y - 6, PLCap);
+    cv.Font.Size := 8; cv.Font.Style := [];
+  end;
+
+  { modal di kiri bawah area harga, ukuran sama dengan untung / rugi }
+  if ModalText <> '' then
+  begin
+    cv.Brush.Style := bsClear;
+    cv.Font.Size := 44; cv.Font.Style := [fsBold]; cv.Font.Color := TitleColor;   { kuning (lebih tua di latar putih) }
+    y := FPlot.Bottom - cv.TextHeight(ModalText) - 4;
+    cv.TextOut(FPlot.Left + 12, y, ModalText);
+    cv.Font.Size := 9; cv.Font.Color := clrMuted;
+    cv.TextOut(FPlot.Left + 14, y - 6, 'MODAL');
+    cv.Font.Size := 8; cv.Font.Style := [];
+  end;
+
+  { nama MA ditulis pada ujung kanan garisnya (digeser bila bertumpuk) }
+  nTag := 0;
+  cv.Font.Size := 7; cv.Font.Style := [fsBold];
+  for m := 0 to 5 do
+    if ShowMA[m] and (Length(MA[m]) = n) then
+    begin
+      i := i1;
+      while (i >= i0) and (MA[m][i] <= 0) do Dec(i);
+      if i < i0 then Continue;
+      s := 'MA' + IntToStr(MAPer[m]);
+      x := Min(XOf(i) + 4, FPlot.Right - cv.TextWidth(s) - 6);
+      y := YOf(MA[m][i]) - 6;
+      repeat
+        moved := False;
+        for j := 0 to nTag - 1 do
+          if Abs(tagY[j] - y) < 13 then begin y := tagY[j] + 13; moved := True; end;
+      until not moved;
+      if (y < FPlot.Top) or (y > FPlot.Bottom - 12) then Continue;
+      tagY[nTag] := y; Inc(nTag);
+      R := Rect(x, y, x + cv.TextWidth(s) + 6, y + 13);
+      cv.Brush.Style := bsSolid; cv.Brush.Color := MAColors[m]; cv.FillRect(R);
+      cv.Brush.Style := bsClear; cv.Font.Color := clrBg;
+      cv.TextOut(R.Left + 3, R.Top, s);
+    end;
+  cv.Font.Size := 8; cv.Font.Style := [];
+
   { info OHLC + legenda }
   cv.Brush.Style := bsClear;
   x := 6;
-  cv.Font.Style := [fsBold]; cv.Font.Color := clrYellow;
+  cv.Font.Style := [fsBold]; cv.Font.Color := TitleColor;
   cv.TextOut(x, 4, Title); Inc(x, cv.TextWidth(Title) + 10);
   cv.Font.Style := [];
   if C[k].C >= C[k].O then col := clrGreen else col := clrRed;
@@ -579,7 +659,7 @@ begin
   end;
   if not FAuto then
   begin
-    cv.Font.Color := clrYellow;
+    cv.Font.Color := TitleColor;
     s := 'Skala manual (klik ganda = otomatis)';
     cv.TextOut(FPlot.Right - cv.TextWidth(s) - 8, 4, s);
   end;
