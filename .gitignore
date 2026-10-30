@@ -1,2 +1,5 @@
 Capture/
 Recognito Trading Fernanda/
+src/*.dcu
+src/*.exe
+src/*.res
