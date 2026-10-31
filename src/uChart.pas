@@ -69,7 +69,7 @@ type
     PLText, PLCap: string;   { untung / rugi MT5 besar di kanan bawah grafik ('' = tidak tampil) }
     PLColor: TColor;
     ModalText: string;   { modal / balance MT5, kuning di kiri bawah grafik ('' = tidak tampil) }
-    BgColor, GridColor, BandColor, TitleColor, FvgBuyColor, FvgSellColor: TColor;   { warna belakang grafik (tab Edukasi) }
+    BgColor, GridColor, BandColor, TitleColor, FvgColor, FvgPen: TColor;   { warna belakang grafik (tab Edukasi) }
     constructor Create(AOwner: TComponent); override;
     destructor Destroy; override;
     procedure Wheel(Delta: Integer; Shift: TShiftState);
@@ -109,16 +109,20 @@ end;
 { warna belakang, grid, area Bollinger & judul untuk tiap pilihan ChartBgNames }
 procedure TChartView.SetBg(Idx: Integer);
 begin
-  TitleColor := clrYellow; FvgBuyColor := RGB(10, 45, 36); FvgSellColor := RGB(50, 18, 26);
+  { FVG abu-abu; arah tetap terlihat dari tulisan FVG hijau / merah }
+  TitleColor := clrYellow; FvgColor := RGB(58, 62, 70); FvgPen := RGB(96, 102, 112);
   case Idx of
     1: begin BgColor := RGB(10, 22, 48); GridColor := RGB(24, 40, 72); BandColor := RGB(22, 30, 66); end;
     2: begin BgColor := RGB(8, 32, 22); GridColor := RGB(20, 52, 38); BandColor := RGB(18, 40, 40); end;
     3: begin
          BgColor := RGB(255, 255, 255); GridColor := RGB(228, 231, 236); BandColor := RGB(238, 232, 250);
-         TitleColor := RGB(170, 120, 0); FvgBuyColor := RGB(205, 240, 225); FvgSellColor := RGB(250, 215, 220);
+         TitleColor := RGB(170, 120, 0); FvgColor := RGB(214, 217, 223); FvgPen := RGB(160, 165, 175);
        end;
     4: begin BgColor := RGB(30, 14, 44); GridColor := RGB(48, 30, 66); BandColor := RGB(44, 24, 64); end;
-    5: begin BgColor := RGB(44, 48, 54); GridColor := RGB(60, 65, 72); BandColor := RGB(54, 52, 68); end;
+    5: begin
+         BgColor := RGB(44, 48, 54); GridColor := RGB(60, 65, 72); BandColor := RGB(54, 52, 68);
+         FvgColor := RGB(82, 87, 96); FvgPen := RGB(120, 126, 136);
+       end;
   else
     BgColor := clrBg; GridColor := RGB(26, 30, 36); BandColor := RGB(20, 17, 33);
   end;
@@ -342,8 +346,7 @@ begin
         if EndIdx = -1 then x := FPlot.Right else x := XOf(EndIdx);
         R := Rect(XOf(StartIdx), YOf(Top), x, YOf(Bot));
         if R.Right < 0 then Continue;
-        if Dir = 1 then begin cv.Brush.Color := FvgBuyColor; cv.Pen.Color := RGB(14, 110, 75); end
-        else begin cv.Brush.Color := FvgSellColor; cv.Pen.Color := RGB(140, 40, 55); end;
+        cv.Brush.Color := FvgColor; cv.Pen.Color := FvgPen;
         cv.Brush.Style := bsSolid;
         cv.Rectangle(R.Left, R.Top, R.Right, R.Bottom + 1);
         cv.Brush.Style := bsClear;

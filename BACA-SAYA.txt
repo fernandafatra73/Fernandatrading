@@ -38,6 +38,9 @@ MT5 EXNESS (tab MT5) - ORDER ROBOT ATAS PERINTAH PENGGUNA
 - Status di bar bawah aplikasi: ORDER ROBOT: MATI.
 - KONEKSI MT5 (sebelah TRADE WILL): hijau = terhubung, merah = belum. Klik untuk cek:
   "Sudah terhubung Fatra73" / "Belom terhubung lagi ngambek Ho".
+- PERSENTASE (di bawah KONEKSI MT5): perbandingan volume 200 candle terakhir di zona
+  10 pip di ATAS harga vs 10 pip di BAWAH harga. Hijau = BAWAH lebih besar (penopang beli),
+  merah = ATAS lebih besar (tekanan jual), kuning = seimbang (45-55%).
 - OPEN (order manual pengguna): klik -> panel BELI / JUAL, bar persentase beli / jual
   (volume 50 candle terakhir), lalu OTOMATIS (harga pasar, langsung eksekusi) atau
   PENDING (harga digeser dengan slider / tombol - +, otomatis BUY/SELL LIMIT atau STOP),

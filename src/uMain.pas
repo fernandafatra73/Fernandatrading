@@ -50,6 +50,7 @@ type
     FMT5Seen: TStringList;
     FLotSynced: Boolean;
     lblMT5PL, lblMT5PLCap, lblRobot: TLabel;
+    lblPct: TLabel;   { PERSENTASE: tekanan volume 10 pip di atas vs 10 pip di bawah harga }
     { koneksi MT5 + panel order manual (OPEN) }
     btnConn, btnOpen, btnOrdBuy, btnOrdSell, btnOrdMkt, btnOrdPend, btnOrdExec: TFlatBtn;
     pnlOrder: TPanel;
@@ -153,6 +154,7 @@ type
     procedure FetchDone(T: TFetchThread);
     procedure Recompute(Full: Boolean);
     procedure UpdateHeader;
+    procedure UpdatePct;
     procedure WriteAnalysis;
     procedure WriteMTF;
     procedure WriteNews;
@@ -690,6 +692,8 @@ begin
   { koneksi MT5, untung / rugi order MT5 pengguna, dan tombol OPEN (order manual) }
   btnConn := MakeBtn(pnlTop, 'KONEKSI MT5', 1232, 16, 90, 26, OnConnBtn);
   btnConn.Bg := clrRedDim; btnConn.Fg := clWhite; btnConn.Bold := True;
+  MakeLabel(pnlTop, 'PERSENTASE', 1232, 44, clrMuted, 7, True);
+  lblPct := MakeLabel(pnlTop, '-', 1296, 44, clrMuted, 7, True);
   lblMT5PLCap := MakeLabel(pnlTop, 'UNTUNG / RUGI MT5', 1330, 6, clrMuted, 7, True);
   lblMT5PL := MakeLabel(pnlTop, '-', 1330, 18, clrMuted, 11, True);
   btnOpen := MakeBtn(pnlTop, 'OPEN', 1450, 16, 104, 26, OnOpenBtn);
@@ -2896,6 +2900,45 @@ begin
   end;
   lblCount.Caption := DirTxt(FSI.Trend) + ' ' + DurStr((n - 1 - FSI.TrendStart) * TFSecs[FTF]);
   lblCount.Font.Color := DirCol(FSI.Trend);
+  UpdatePct;
+end;
+
+{ PERSENTASE: volume 200 candle terakhir (dibagi rata sepanjang high-low tiap candle)
+  yang jatuh di zona 10 pip di atas vs 10 pip di bawah harga sekarang }
+procedure TMainForm.UpdatePct;
+var n, i: Integer; p, z, rng, va, vb, ov: Double;
+begin
+  n := Length(FCandles);
+  if n = 0 then Exit;
+  p := FCandles[n - 1].C;
+  z := 10 * PipSize;
+  va := 0; vb := 0;
+  for i := Max(0, n - 200) to n - 1 do
+    with FCandles[i] do
+    begin
+      rng := H - L;
+      if rng <= 0 then
+      begin
+        if (C > p) and (C <= p + z) then va := va + V
+        else if (C < p) and (C >= p - z) then vb := vb + V;
+        Continue;
+      end;
+      ov := Min(H, p + z) - Max(L, p);
+      if ov > 0 then va := va + V * ov / rng;
+      ov := Min(H, p) - Max(L, p - z);
+      if ov > 0 then vb := vb + V * ov / rng;
+    end;
+  if va + vb <= 0 then
+  begin
+    lblPct.Caption := '-';
+    lblPct.Font.Color := clrMuted;
+    Exit;
+  end;
+  va := va / (va + vb) * 100;
+  lblPct.Caption := Format('ATAS %.0f%%  |  BAWAH %.0f%%', [va, 100 - va]);
+  if va > 55 then lblPct.Font.Color := clrRed
+  else if va < 45 then lblPct.Font.Color := clrGreen
+  else lblPct.Font.Color := clrYellow;
 end;
 
 function TMainForm.TimeStrU(U: TDateTime): string;
