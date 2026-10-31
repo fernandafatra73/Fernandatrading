@@ -10,7 +10,7 @@ uses Windows, SysUtils, Classes;
 function MT5CommonDir: string;
 function MT5WriteCmd(AutoOn, CloseAll: Boolean; LotBuy, LotSell: Double): Boolean;
 function MT5ReadStatus(SL: TStringList; out AgeSec: Double): Boolean;
-function MT5WriteOrder(const Side, OType: string; Lot, Price: Double; out ID: string): Boolean;
+function MT5WriteOrder(const Sym, Side, OType: string; Lot, Price: Double; out ID: string): Boolean;
 function MT5ExtractEA(const FileName: string): Boolean;
 function MT5InstallEA(Dirs: TStrings): Integer;
 
@@ -63,8 +63,9 @@ begin
 end;
 
 { order manual pengguna (BUY / SELL, MARKET / PENDING) ke RecognitoOrder.txt;
-  EA mengeksekusi sekali dan mengabaikan order yang lebih tua dari 20 detik }
-function MT5WriteOrder(const Side, OType: string; Lot, Price: Double; out ID: string): Boolean;
+  EA mengeksekusi sekali dan mengabaikan order yang lebih tua dari 20 detik.
+  Sym = simbol MT5 (mis. XAUUSDm, BTCUSDm); kosong = simbol chart tempat EA dipasang }
+function MT5WriteOrder(const Sym, Side, OType: string; Lot, Price: Double; out ID: string): Boolean;
 var sl: TStringList;
 begin
   Result := False;
@@ -75,8 +76,9 @@ begin
     sl.Add('ID=' + ID);
     sl.Add('SIDE=' + Side);
     sl.Add('TYPE=' + OType);
+    sl.Add('SYMBOL=' + Sym);
     sl.Add('LOT=' + FormatFloat('0.00', Lot));
-    sl.Add('PRICE=' + FormatFloat('0.00###', Price));
+    sl.Add('PRICE=' + FormatFloat('0.00######', Price));
     sl.Add('TIME=' + FormatDateTime('yyyy.mm.dd hh:nn:ss', Now));
     try
       ForceDirectories(MT5CommonDir);

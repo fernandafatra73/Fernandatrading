@@ -41,7 +41,17 @@ MT5 EXNESS (tab MT5) - ORDER ROBOT ATAS PERINTAH PENGGUNA
 - PERSENTASE (di bawah KONEKSI MT5): perbandingan volume 200 candle terakhir di zona
   10 pip di ATAS harga vs 10 pip di BAWAH harga. Hijau = BAWAH lebih besar (penopang beli),
   merah = ATAS lebih besar (tekanan jual), kuning = seimbang (45-55%).
-- OPEN (order manual pengguna): klik -> panel BELI / JUAL, bar persentase beli / jual
+- MT5 CRYPTO / BINANCE (di atas daftar koin kiri): MT5 CRYPTO = crypto yang ada di Market
+  Watch MT5 (nama & harga MT5, mis. BTCUSDm); BINANCE = semua koin Binance seperti biasa.
+  Tambah koin di MT5: klik kanan Market Watch > Symbols. Grafik tetap memakai data Binance.
+- OPEN BINANCE (di bawah OPEN): order NYATA ke akun Binance Spot untuk koin di grafik
+  (emas = PAXGUSDT). BELI / JUAL, HARGA PASAR atau LIMIT, jumlah dalam USDT (min. ~5),
+  CEK SALDO, dan EKSEKUSI selalu dengan konfirmasi.
+  API KEY: buat di Binance > API Management, centang HANYA "Spot & Margin Trading",
+  JANGAN izinkan Withdraw. Key & secret tersimpan di binance.ini (tidak ikut ke GitHub,
+  jangan dibagikan).
+- OPEN (order MT5, mengikuti grafik: emas -> XAUUSDm, crypto -> simbol MT5-nya mis. BTCUSDm):
+  klik -> panel BELI / JUAL, bar persentase beli / jual
   (volume 50 candle terakhir), lalu OTOMATIS (harga pasar, langsung eksekusi) atau
   PENDING (harga digeser dengan slider / tombol - +, otomatis BUY/SELL LIMIT atau STOP),
   pilihan lot, dan tombol EKSEKUSI (selalu dengan konfirmasi). Order tanpa SL / TP.

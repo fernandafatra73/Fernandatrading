@@ -4,7 +4,7 @@ interface
 
 uses Windows, Messages, SysUtils, Classes, Graphics, Controls, Forms, ExtCtrls, StdCtrls,
   ComCtrls, Grids, Math, DateUtils, StrUtils, ShellAPI,
-  Dialogs, Jpeg, Registry, Menus, uUI, uNet, uData, uChart, uSession, uMT5, uRec, uCctv;
+  Dialogs, Jpeg, Registry, Menus, uUI, uNet, uData, uChart, uSession, uMT5, uRec, uCctv, uBinance;
 
 const
   TFNames: array[0..7] of string = ('1m', '5m', '15m', '30m', '1h', '4h', '1d', '1w');
@@ -88,6 +88,20 @@ type
     FGripW, FGripH: Integer;
     FPendBase, FMT5Bid, FMT5Ask: Double;
     FMT5Sym, FOrdID: string;
+    FMT5Dig: Integer;   { digit harga simbol MT5 yang dipakai order }
+    { Market Watch MT5 (dari EA): nama;bid;ask;digit, dipakai daftar MT5 CRYPTO + order per koin }
+    FMWName: array of string;
+    FMWBid, FMWAsk: array of Double;
+    FMWDig: array of Integer;
+    FSrcMT5: Boolean;   { daftar koin kiri: True = MT5 CRYPTO, False = BINANCE }
+    btnSrcMT5, btnSrcBin: TFlatBtn;
+    { order Binance Spot (tombol OPEN BINANCE) }
+    btnOpenBin, btnBinBuy, btnBinSell, btnBinMkt, btnBinLim, btnBinExec: TFlatBtn;
+    pnlBin: TPanel;
+    lblBinTitle, lblBinKey, lblBinBal, lblBinRes: TLabel;
+    edBinAmt, edBinPx: TEdit;
+    FBinSide: Integer;
+    FBinLimit: Boolean;
     FOrdAt: TDateTime;
     pbSess: TPaintBox;
     Chart: TChartView;
@@ -155,6 +169,14 @@ type
     procedure Recompute(Full: Boolean);
     procedure UpdateHeader;
     procedure UpdatePct;
+    procedure ParseMW(sl: TStringList);
+    function MWIndex(const Base: string): Integer;
+    function CurBase: string;
+    function OrdFmt: string;
+    function OrdDig: Integer;
+    function OrdBase: string;
+    function OrdPip: Double;
+    procedure OnSrc(Sender: TObject);
     procedure WriteAnalysis;
     procedure WriteMTF;
     procedure WriteNews;
@@ -204,6 +226,16 @@ type
     procedure UpdateMT5;
     procedure MT5Guide;
     procedure BuildOrderPanel;
+    procedure BuildBinPanel;
+    procedure UpdateBinPanel;
+    function BinSym: string;
+    procedure OnOpenBin(Sender: TObject);
+    procedure OnBinSide(Sender: TObject);
+    procedure OnBinType(Sender: TObject);
+    procedure OnBinEdit(Sender: TObject);
+    procedure OnBinKey(Sender: TObject);
+    procedure OnBinBal(Sender: TObject);
+    procedure OnBinExec(Sender: TObject);
     procedure UpdateOrderPanel;
     function OrdPrice: Double;
     procedure OnConnBtn(Sender: TObject);
@@ -601,6 +633,7 @@ begin
   Chart.SetBg(cbChartBg.ItemIndex);
   BuildCapView;
   BuildOrderPanel;
+  BuildBinPanel;
 
   { Kamera CCTV PH: menutupi area grafik saat dibuka dari menu KONEKSI MT5 }
   Cctv := TCctvView.Create(Self);
@@ -696,7 +729,12 @@ begin
   lblPct := MakeLabel(pnlTop, '-', 1296, 44, clrMuted, 7, True);
   lblMT5PLCap := MakeLabel(pnlTop, 'UNTUNG / RUGI MT5', 1330, 6, clrMuted, 7, True);
   lblMT5PL := MakeLabel(pnlTop, '-', 1330, 18, clrMuted, 11, True);
-  btnOpen := MakeBtn(pnlTop, 'OPEN', 1450, 16, 104, 26, OnOpenBtn);
+  { satu tombol order: mengikuti grafik (emas -> XAUUSDm, crypto -> simbol MT5-nya, mis. BTCUSDm) }
+  btnOpen := MakeBtn(pnlTop, 'OPEN', 1450, 4, 120, 24, OnOpenBtn);
+  { order Binance Spot langsung dari aplikasi (butuh API key, tersimpan di binance.ini) }
+  btnOpenBin := MakeBtn(pnlTop, 'OPEN BINANCE', 1450, 31, 120, 24, OnOpenBin);
+  btnOpenBin.Bg := RGB(240, 185, 11); btnOpenBin.Fg := clrBg; btnOpenBin.Bold := True;
+  btnOpenBin.BgDown := RGB(200, 150, 0); btnOpenBin.FgDown := clrBg;
   btnOpen.Bg := clrYellow; btnOpen.Fg := clrBg; btnOpen.Bold := True;
   btnOpen.BgDown := clrGold; btnOpen.FgDown := clrBg;
 
@@ -730,6 +768,14 @@ begin
   edSearch.CharCase := ecUpperCase;
   edSearch.OnChange := OnSearch;
   MakeBtn(p, 'Refresh', 256, 5, 70, 24, OnRefresh);
+
+  { sumber daftar koin: crypto di Market Watch MT5 atau semua koin Binance }
+  p := MakePanel(pnlLeft, alTop, 32, clrPanel);
+  btnSrcMT5 := MakeBtn(p, 'MT5 CRYPTO', 8, 4, 158, 24, OnSrc, 1);
+  btnSrcMT5.BgDown := clrGreenDim; btnSrcMT5.FgDown := clWhite; btnSrcMT5.Bold := True;
+  btnSrcBin := MakeBtn(p, 'BINANCE', 170, 4, 158, 24, OnSrc, 0);
+  btnSrcBin.BgDown := RGB(240, 185, 11); btnSrcBin.FgDown := clrBg; btnSrcBin.Bold := True;
+  btnSrcBin.Down := True;
 
   p := MakePanel(pnlLeft, alTop, 62, clrPanel);
   for i := 0 to 5 do
@@ -1580,11 +1626,28 @@ begin
     { harga MT5 untuk panel order + hasil order yang sedang ditunggu }
     if FMT5Alive then
     begin
-      FMT5Bid := PF(sl.Values['PRICE']);
-      FMT5Ask := PF(sl.Values['ASK']);
       FMT5Old := sl.IndexOfName('ORDACK') < 0;   { EA versi lama: belum bisa menerima order }
-      if FMT5Ask <= 0 then FMT5Ask := FMT5Bid;
-      FMT5Sym := sl.Values['SYMBOL'];
+      ParseMW(sl);
+      if Length(FMWName) = 0 then
+      begin
+        { EA tanpa daftar Market Watch: hanya simbol chart EA (emas) }
+        FMT5Bid := PF(sl.Values['PRICE']);
+        FMT5Ask := PF(sl.Values['ASK']);
+        if FMT5Ask <= 0 then FMT5Ask := FMT5Bid;
+        FMT5Sym := sl.Values['SYMBOL'];
+        FMT5Dig := StrToIntDef(sl.Values['DIGITS'], 2);
+        if not FIsGold then begin FMT5Sym := ''; FMT5Bid := 0; FMT5Ask := 0; end;
+      end
+      else if MWIndex(OrdBase) >= 0 then
+      begin
+        { koin yang dibuka di grafik -> simbol MT5-nya (mis. BTCUSDT -> BTCUSDm) }
+        FMT5Sym := FMWName[MWIndex(OrdBase)];
+        FMT5Bid := FMWBid[MWIndex(OrdBase)];
+        FMT5Ask := FMWAsk[MWIndex(OrdBase)];
+        FMT5Dig := FMWDig[MWIndex(OrdBase)];
+        if FMT5Ask <= 0 then FMT5Ask := FMT5Bid;
+      end
+      else begin FMT5Sym := ''; FMT5Bid := 0; FMT5Ask := 0; end;
       v := sl.Values['ORDACK'];
       if (FOrdID <> '') and (Copy(v, 1, Length(FOrdID) + 1) = FOrdID + ';') then
       begin
@@ -1845,10 +1908,82 @@ begin
   end;
 end;
 
+{ digit & format harga order: dari simbol MT5 (mis. BTCUSDm), selain itu harga grafik }
+function TMainForm.OrdDig: Integer;
+begin
+  if FMT5Sym <> '' then Result := FMT5Dig else Result := PriceDigits;
+end;
+
+function TMainForm.OrdFmt: string;
+begin
+  if OrdDig <= 0 then Result := '0' else Result := '0.' + StringOfChar('0', OrdDig);
+end;
+
+{ koin panel order = koin di grafik (emas -> XAU) }
+function TMainForm.OrdBase: string;
+begin
+  Result := CurBase;
+end;
+
+{ 1 pip panel order = pip grafik (emas 0.10) }
+function TMainForm.OrdPip: Double;
+begin
+  Result := PipSize;
+end;
+
+{ koin yang sedang dibuka tanpa USDT (BTCUSDT -> BTC, emas -> XAU) }
+function TMainForm.CurBase: string;
+begin
+  if FIsGold then Result := 'XAU'
+  else if Copy(FSym, Length(FSym) - 3, 4) = 'USDT' then Result := Copy(FSym, 1, Length(FSym) - 4)
+  else Result := FSym;
+end;
+
+{ simbol Market Watch MT5 untuk koin: nama diawali BASE + 'USD' (BTCUSDm, ETHUSD, ...), yang terpendek }
+function TMainForm.MWIndex(const Base: string): Integer;
+var i: Integer;
+begin
+  Result := -1;
+  if Base = '' then Exit;
+  for i := 0 to High(FMWName) do
+    if (Copy(UpperCase(FMWName[i]), 1, Length(Base) + 3) = Base + 'USD') and
+       ((Result < 0) or (Length(FMWName[i]) < Length(FMWName[Result]))) then Result := i;
+end;
+
+{ baris MW=nama;bid;ask;digit dari status EA }
+procedure TMainForm.ParseMW(sl: TStringList);
+var i, n, old: Integer; parts: TStringList;
+begin
+  old := Length(FMWName);
+  n := 0;
+  SetLength(FMWName, sl.Count); SetLength(FMWBid, sl.Count);
+  SetLength(FMWAsk, sl.Count); SetLength(FMWDig, sl.Count);
+  parts := TStringList.Create;
+  try
+    parts.Delimiter := ';';
+    for i := 0 to sl.Count - 1 do
+      if Copy(sl[i], 1, 3) = 'MW=' then
+      begin
+        parts.DelimitedText := Copy(sl[i], 4, MaxInt);
+        if parts.Count < 4 then Continue;
+        FMWName[n] := parts[0];
+        FMWBid[n] := PF(parts[1]);
+        FMWAsk[n] := PF(parts[2]);
+        FMWDig[n] := StrToIntDef(parts[3], 2);
+        Inc(n);
+      end;
+  finally
+    parts.Free;
+  end;
+  SetLength(FMWName, n); SetLength(FMWBid, n); SetLength(FMWAsk, n); SetLength(FMWDig, n);
+  if FSrcMT5 then
+    if n <> old then ApplyFilter else grid.Invalidate;
+end;
+
 procedure TMainForm.UpdateOrderPanel;
 var px, pp, ask, bid: Double; lot: Double; kind: string; d, n: Integer;
 begin
-  d := 2;
+  d := OrdDig;
   if FMT5Bid > 0 then begin bid := FMT5Bid; ask := FMT5Ask; end
   else begin bid := OrdPrice; ask := bid; end;
   btnOpen.Caption := 'OPEN  ' + Sx(bid > 0, FmtP(bid, d), '');
@@ -1858,7 +1993,8 @@ begin
     Chart.Invalidate;
   end;
   if not pnlOrder.Visible then Exit;
-  lblOrdTitle.Caption := 'ORDER MT5  ' + Sx(FMT5Sym <> '', FMT5Sym, '(belum terhubung)') +
+  lblOrdTitle.Caption := 'ORDER MT5  ' +
+    Sx(FMT5Sym <> '', FMT5Sym, Sx(FMT5Alive, '(koin ini tidak ada di MT5)', '(belum terhubung)')) +
     Sx(FMT5Alive and FMT5Old, '  EA LAMA!', '');
   lblOrdTitle.Font.Color := Cx(FMT5Alive and FMT5Old, clrRed, clrYellow);
   btnOrdBuy.Caption := 'BELI   ' + Sx(ask > 0, FmtP(ask, d), '');
@@ -1876,7 +2012,7 @@ begin
     pp := PF(StringReplace(edPend.Text, ',', '.', []));
     if FOrdSide > 0 then kind := Sx(pp < ask, 'BUY LIMIT', 'BUY STOP')
     else kind := Sx(pp > bid, 'SELL LIMIT', 'SELL STOP');
-    lblPendInfo.Caption := Format('%s  -  %.0f pips %s harga sekarang (%s)', [kind, Abs(pp - px) / 0.1,
+    lblPendInfo.Caption := Format('%s  -  %.0f pips %s harga sekarang (%s)', [kind, Abs(pp - px) / OrdPip,
       Sx(pp < px, 'di bawah', 'di atas'), FmtP(px, d)]);
     lblPendInfo.Font.Color := DirCol(FOrdSide);
     btnOrdExec.Caption := Format('EKSEKUSI %s %s @ %s', [kind, FormatFloat('0.00', lot), FmtP(pp, d)]);
@@ -1936,6 +2072,225 @@ begin
   end;
 end;
 
+{ ---------------- Order Binance Spot (tombol OPEN BINANCE) ---------------- }
+
+{ simbol Binance Spot untuk koin di grafik; emas memakai PAXGUSDT (token emas 1:1) }
+function TMainForm.BinSym: string;
+begin
+  if FIsGold then Result := 'PAXGUSDT' else Result := FSym;
+end;
+
+procedure TMainForm.BuildBinPanel;
+var outer, f: TPanel;
+
+  function NewEdit(X, Y, W: Integer; const Txt: string): TEdit;
+  begin
+    Result := TEdit.Create(Self);
+    Result.Parent := f;
+    Result.SetBounds(X, Y, W, 22);
+    Result.Color := clrPanel2;
+    Result.Font.Color := clrText;
+    Result.Font.Name := 'Segoe UI';
+    Result.Text := Txt;
+    Result.OnChange := OnBinEdit;
+  end;
+
+begin
+  FBinSide := 1;
+  FBinLimit := False;
+  BinLoadKeys(ExtractFilePath(ParamStr(0)) + 'binance.ini');
+  outer := MakePanel(pnlCenter, alNone, 0, RGB(240, 185, 11));
+  outer.SetBounds(0, 0, 312, 304);
+  outer.BorderWidth := 1;
+  outer.Visible := False;
+  pnlBin := outer;
+  f := MakePanel(outer, alClient, 0, clrPanel);
+
+  lblBinTitle := MakeLabel(f, 'ORDER BINANCE SPOT', 8, 6, RGB(240, 185, 11), 10, True);
+  with MakeBtn(f, 'X', 278, 4, 26, 22, OnOpenBin) do
+  begin
+    Bg := clrRedDim; Fg := clWhite; Bold := True;
+  end;
+  lblBinKey := MakeLabel(f, '', 8, 30, clrMuted, 7);
+  with MakeBtn(f, 'API KEY', 214, 27, 90, 20, OnBinKey) do
+  begin
+    Bg := clrPanel2; Fg := clrYellow; Bold := True;
+  end;
+
+  btnBinBuy := MakeBtn(f, 'BELI', 6, 52, 146, 36, OnBinSide, 1);
+  btnBinBuy.BgDown := clrGreen; btnBinBuy.FgDown := clWhite; btnBinBuy.Bg := clrGreenDim; btnBinBuy.Fg := clWhite;
+  btnBinSell := MakeBtn(f, 'JUAL', 158, 52, 146, 36, OnBinSide, -1);
+  btnBinSell.BgDown := clrRed; btnBinSell.FgDown := clWhite; btnBinSell.Bg := clrRedDim; btnBinSell.Fg := clWhite;
+
+  btnBinMkt := MakeBtn(f, 'HARGA PASAR', 6, 94, 146, 24, OnBinType, 0);
+  btnBinMkt.BgDown := clrBlue; btnBinMkt.FgDown := clWhite;
+  btnBinLim := MakeBtn(f, 'LIMIT', 158, 94, 146, 24, OnBinType, 1);
+  btnBinLim.BgDown := clrBlue; btnBinLim.FgDown := clWhite;
+
+  MakeLabel(f, 'Jumlah (USDT):', 8, 130, clrMuted, 8, True);
+  edBinAmt := NewEdit(120, 126, 100, '10');
+  MakeLabel(f, 'Harga limit:', 8, 158, clrMuted, 8, True);
+  edBinPx := NewEdit(120, 154, 130, '');
+
+  lblBinBal := MakeLabel(f, 'Saldo: -', 8, 186, clrMuted, 8);
+  with MakeBtn(f, 'CEK SALDO', 214, 182, 90, 22, OnBinBal) do
+  begin
+    Bg := clrPanel2; Fg := clrText; Bold := True;
+  end;
+
+  btnBinExec := MakeBtn(f, 'EKSEKUSI', 6, 212, 298, 34, OnBinExec);
+  btnBinExec.Bold := True;
+
+  lblBinRes := MakeLabel(f, 'Order NYATA ke akun Binance Spot, selalu dengan konfirmasi.', 8, 252, clrMuted, 7);
+  lblBinRes.AutoSize := False;
+  lblBinRes.WordWrap := True;
+  lblBinRes.SetBounds(8, 252, 296, 44);
+end;
+
+procedure TMainForm.UpdateBinPanel;
+var amt: Double;
+begin
+  if not pnlBin.Visible then Exit;
+  lblBinTitle.Caption := 'ORDER BINANCE SPOT  ' + BinSym;
+  lblBinKey.Caption := 'API: ' + BinKeyMasked;
+  btnBinBuy.Down := FBinSide > 0;
+  btnBinSell.Down := FBinSide < 0;
+  btnBinMkt.Down := not FBinLimit;
+  btnBinLim.Down := FBinLimit;
+  edBinPx.Enabled := FBinLimit;
+  amt := PF(StringReplace(edBinAmt.Text, ',', '.', []));
+  if FBinLimit then
+    btnBinExec.Caption := Format('EKSEKUSI %s %s USDT @ %s', [Sx(FBinSide > 0, 'BELI', 'JUAL'),
+      FormatFloat('0.##', amt), edBinPx.Text])
+  else
+    btnBinExec.Caption := Format('EKSEKUSI %s %s USDT  (harga pasar)', [Sx(FBinSide > 0, 'BELI', 'JUAL'),
+      FormatFloat('0.##', amt)]);
+  btnBinExec.Bg := Cx(FBinSide > 0, clrGreen, clrRed);
+  btnBinExec.Fg := clWhite;
+  btnBinExec.Invalidate;
+end;
+
+procedure TMainForm.OnOpenBin(Sender: TObject);
+var pt: TPoint;
+begin
+  pnlBin.Visible := not pnlBin.Visible;
+  btnOpenBin.Down := pnlBin.Visible;
+  if not pnlBin.Visible then Exit;
+  pt := pnlCenter.ScreenToClient(btnOpenBin.ClientToScreen(Point(0, 0)));
+  pnlBin.Left := Max(0, Min(pt.X + btnOpenBin.Width - pnlBin.Width, pnlCenter.ClientWidth - pnlBin.Width));
+  pnlBin.Top := 4;
+  pnlBin.BringToFront;
+  if Length(FCandles) > 0 then edBinPx.Text := FormatFloat('0.########', FCandles[High(FCandles)].C);
+  UpdateBinPanel;
+end;
+
+procedure TMainForm.OnBinSide(Sender: TObject);
+begin
+  FBinSide := TFlatBtn(Sender).Tag;
+  UpdateBinPanel;
+end;
+
+procedure TMainForm.OnBinType(Sender: TObject);
+begin
+  FBinLimit := TFlatBtn(Sender).Tag = 1;
+  UpdateBinPanel;
+end;
+
+procedure TMainForm.OnBinEdit(Sender: TObject);
+begin
+  UpdateBinPanel;
+end;
+
+{ API key & secret Binance: buat di Binance > API Management, izinkan Spot Trading saja
+  (jangan aktifkan Withdraw). Disimpan di binance.ini di folder aplikasi }
+procedure TMainForm.OnBinKey(Sender: TObject);
+var k, s: string;
+begin
+  k := '';
+  if not InputQuery('API KEY Binance', 'API Key (izin Spot Trading saja, JANGAN izinkan Withdraw):', k) then Exit;
+  s := '';
+  if not InputQuery('API SECRET Binance', 'Secret Key:', s) then Exit;
+  if (Trim(k) = '') or (Trim(s) = '') then Exit;
+  BinSaveKeys(ExtractFilePath(ParamStr(0)) + 'binance.ini', k, s);
+  lblBinRes.Caption := 'API key disimpan. Klik CEK SALDO untuk menguji.';
+  lblBinRes.Font.Color := clrGreen;
+  UpdateBinPanel;
+end;
+
+procedure TMainForm.OnBinBal(Sender: TObject);
+var u, b: Double; m, base: string;
+begin
+  base := Copy(BinSym, 1, Length(BinSym) - 4);
+  Screen.Cursor := crHourGlass;
+  try
+    if BinBalances(base, u, b, m) then
+    begin
+      lblBinBal.Caption := Format('Saldo: USDT %s  |  %s %s', [FormatFloat('0.##', u), base, FormatFloat('0.########', b)]);
+      lblBinBal.Font.Color := clrText;
+    end
+    else
+    begin
+      lblBinBal.Caption := 'Saldo: gagal';
+      lblBinRes.Caption := 'GAGAL: ' + m;
+      lblBinRes.Font.Color := clrRed;
+    end;
+  finally
+    Screen.Cursor := crDefault;
+  end;
+end;
+
+procedure TMainForm.OnBinExec(Sender: TObject);
+var amt, px: Double; side, otype, msg, res: string;
+begin
+  if not BinHasKeys then
+  begin
+    MessageDlg('API key Binance belum diisi. Klik API KEY di panel ini.', mtWarning, [mbOK], 0);
+    Exit;
+  end;
+  amt := PF(StringReplace(edBinAmt.Text, ',', '.', []));
+  if amt < 5 then
+  begin
+    MessageDlg('Jumlah minimal sekitar 5 USDT (aturan Binance).', mtWarning, [mbOK], 0);
+    Exit;
+  end;
+  px := 0;
+  if FBinLimit then
+  begin
+    px := PF(StringReplace(edBinPx.Text, ',', '.', []));
+    if px <= 0 then
+    begin
+      MessageDlg('Isi harga limit.', mtWarning, [mbOK], 0);
+      Exit;
+    end;
+  end;
+  side := Sx(FBinSide > 0, 'BUY', 'SELL');
+  otype := Sx(FBinLimit, 'LIMIT', 'MARKET');
+  msg := Format('%s %s senilai %s USDT', [Sx(FBinSide > 0, 'BELI', 'JUAL'), BinSym, FormatFloat('0.##', amt)]);
+  if FBinLimit then msg := msg + ' @ ' + edBinPx.Text + ' (LIMIT)' else msg := msg + ' (harga pasar)';
+  if MessageDlg('Kirim order NYATA ke Binance Spot?' + #13#10#13#10 + msg + #13#10#13#10 +
+    'Trading berisiko.', mtWarning, [mbYes, mbNo], 0) <> mrYes then Exit;
+  lblBinRes.Caption := 'Mengirim ke Binance: ' + msg + ' ...';
+  lblBinRes.Font.Color := clrYellow;
+  lblBinRes.Repaint;
+  Screen.Cursor := crHourGlass;
+  try
+    if BinOrder(BinSym, side, otype, amt, px, res) then
+    begin
+      lblBinRes.Caption := 'BERHASIL: ' + res;
+      lblBinRes.Font.Color := clrGreen;
+      AddLog('Order Binance: ' + res, clrGreen);
+    end
+    else
+    begin
+      lblBinRes.Caption := 'GAGAL: ' + res;
+      lblBinRes.Font.Color := clrRed;
+      AddLog('Order Binance GAGAL (' + msg + '): ' + res, clrRed);
+    end;
+  finally
+    Screen.Cursor := crDefault;
+  end;
+end;
+
 procedure TMainForm.OnOrdSide(Sender: TObject);
 begin
   FOrdSide := TFlatBtn(Sender).Tag;
@@ -1949,7 +2304,7 @@ begin
   FPendBase := OrdPrice;
   FPendSync := True;
   tbPend.Position := 0;
-  edPend.Text := FormatFloat('0.00', FPendBase);
+  edPend.Text := FormatFloat(OrdFmt, FPendBase);
   FPendSync := False;
   UpdateOrderPanel;
 end;
@@ -1958,7 +2313,7 @@ procedure TMainForm.OnPendTrack(Sender: TObject);
 begin
   if FPendSync then Exit;
   FPendSync := True;
-  edPend.Text := FormatFloat('0.00', FPendBase + tbPend.Position * 0.1);
+  edPend.Text := FormatFloat(OrdFmt, FPendBase + tbPend.Position * OrdPip);
   FPendSync := False;
   UpdateOrderPanel;
 end;
@@ -1966,7 +2321,7 @@ end;
 procedure TMainForm.OnPendStep(Sender: TObject);
 begin
   if not FOrdPending then Exit;
-  edPend.Text := FormatFloat('0.00', PF(StringReplace(edPend.Text, ',', '.', [])) + TFlatBtn(Sender).Tag * 0.1);
+  edPend.Text := FormatFloat(OrdFmt, PF(StringReplace(edPend.Text, ',', '.', [])) + TFlatBtn(Sender).Tag * OrdPip);
 end;
 
 procedure TMainForm.OnPendEdit(Sender: TObject);
@@ -1974,7 +2329,7 @@ var p: Integer;
 begin
   if (Sender = edPend) and (not FPendSync) and (FPendBase > 0) then
   begin
-    p := Round((PF(StringReplace(edPend.Text, ',', '.', [])) - FPendBase) / 0.1);
+    p := Round((PF(StringReplace(edPend.Text, ',', '.', [])) - FPendBase) / OrdPip);
     FPendSync := True;
     tbPend.Position := Max(tbPend.Min, Min(tbPend.Max, p));
     FPendSync := False;
@@ -2036,6 +2391,18 @@ begin
       'lalu seret lagi RecognitoBridge dari Navigator ke chart.', mtWarning, [mbOK], 0);
     Exit;
   end;
+  if OrdBase = '' then
+  begin
+    MessageDlg('Pilih dulu koin crypto di daftar kiri (tombol MT5 CRYPTO), lalu OPEN CRYPTO.', mtInformation, [mbOK], 0);
+    Exit;
+  end;
+  if FMT5Sym = '' then
+  begin
+    MessageDlg(OrdBase + ' tidak ada di Market Watch MT5.' + #13#10#13#10 +
+      'Di MT5: klik kanan Market Watch > Symbols, tampilkan ' + OrdBase + 'USD, lalu coba lagi.' + #13#10 +
+      'Bila EA masih versi lama, order hanya bisa di simbol chart EA (emas).', mtWarning, [mbOK], 0);
+    Exit;
+  end;
   if FOrdID <> '' then
   begin
     MessageDlg('Order sebelumnya masih menunggu jawaban MT5.', mtInformation, [mbOK], 0);
@@ -2059,14 +2426,14 @@ begin
     end;
     if FOrdSide > 0 then kind := Sx(pp < FMT5Ask, 'BUY LIMIT', 'BUY STOP')
     else kind := Sx(pp > FMT5Bid, 'SELL LIMIT', 'SELL STOP');
-    msg := Format('%s %s %s @ %s', [kind, FormatFloat('0.00', lot), FMT5Sym, FmtP(pp, 2)]);
+    msg := Format('%s %s %s @ %s', [kind, FormatFloat('0.00', lot), FMT5Sym, FmtP(pp, OrdDig)]);
   end
   else
     msg := Format('%s %s %s harga pasar (sekarang %s)', [Sx(FOrdSide > 0, 'BELI', 'JUAL'), FormatFloat('0.00', lot),
-      FMT5Sym, FmtP(OrdPrice, 2)]);
+      FMT5Sym, FmtP(OrdPrice, OrdDig)]);
   if MessageDlg('Kirim order NYATA ke MT5?' + #13#10#13#10 + msg + #13#10#13#10 +
     'Tanpa SL / TP. Trading berisiko.', mtWarning, [mbYes, mbNo], 0) <> mrYes then Exit;
-  if not MT5WriteOrder(side, Sx(FOrdPending, 'PENDING', 'MARKET'), lot, pp, id) then
+  if not MT5WriteOrder(FMT5Sym, side, Sx(FOrdPending, 'PENDING', 'MARKET'), lot, pp, id) then
   begin
     lblOrdRes.Caption := 'Gagal menulis order ke folder MT5.';
     lblOrdRes.Font.Color := clrRed;
@@ -2587,6 +2954,13 @@ begin
   Chart.ResetView;
   lblSym.Caption := FSym;
   lblPrice.Caption := '...';
+  { panel order ikut koin baru: simbol & harga MT5 langsung dibaca ulang, harga pending direset }
+  FMT5Bid := 0; FMT5Ask := 0; FMT5Sym := '';
+  UpdateMT5;
+  if pnlOrder.Visible then OnOrdMode(nil);
+  lblBinBal.Caption := 'Saldo: -';
+  edBinPx.Text := '';
+  UpdateBinPanel;
   LoadMain;
   LoadMTF;
 end;
@@ -3434,7 +3808,13 @@ begin
       if (System.Pos(' ' + Base + ' ', StableBases) > 0) then Continue;
       if (System.Pos('UP', Base) > 0) and (Copy(Base, Length(Base) - 1, 2) = 'UP') and (Length(Base) > 3) then Continue;
       if (Copy(Base, Length(Base) - 3, 4) = 'DOWN') then Continue;
-      if (QVol < 1000000) and not IsGold then Continue;
+      if FSrcMT5 then
+      begin
+        { MT5 CRYPTO: hanya koin yang ada di Market Watch MT5 (tanpa emas & mata uang) }
+        if IsGold or (System.Pos(' ' + Base + ' ', ' EUR GBP AUD JPY CHF CAD NZD TRY BRL ZAR MXN ') > 0) or
+           (MWIndex(Base) < 0) then Continue;
+      end
+      else if (QVol < 1000000) and not IsGold then Continue;
       if (q <> '') and (System.Pos(q, Sym) = 0) then Continue;
       if (sec <> '') and (System.Pos(' ' + Base + ' ', sec) = 0) then Continue;
       case FCat of
@@ -3492,7 +3872,8 @@ begin
     if (ARow = 1) and (ACol = 0) then
     begin
       cv.Font.Color := clrMuted;
-      cv.TextOut(Rect.Left + 6, Rect.Top + 5, Sx(FTickN = 0, 'Memuat...', 'Tidak ada'));
+      cv.TextOut(Rect.Left + 6, Rect.Top + 5, Sx(FTickN = 0, 'Memuat...',
+        Sx(FSrcMT5 and (Length(FMWName) = 0), 'MT5 belum terhubung', 'Tidak ada')));
     end;
     Exit;
   end;
@@ -3507,13 +3888,18 @@ begin
     0: begin
          cv.Font.Style := [fsBold];
          cv.Font.Color := Cx(t.IsGold, clrGold, clrText);
-         cv.TextOut(Rect.Left + 6, Rect.Top + 1, t.Base);
+         { MT5 CRYPTO: nama simbol MT5 (mis. BTCUSDm) }
+         if FSrcMT5 and (MWIndex(t.Base) >= 0) then cv.TextOut(Rect.Left + 6, Rect.Top + 1, FMWName[MWIndex(t.Base)])
+         else cv.TextOut(Rect.Left + 6, Rect.Top + 1, t.Base);
          cv.Font.Style := []; cv.Font.Size := 7; cv.Font.Color := clrMuted;
          cv.TextOut(Rect.Left + 6 + 0, Rect.Top + 12, 'Vol ' + FormatFloat('0.0', t.QVol / 1E6) + 'M');
        end;
     1: begin
          cv.Font.Color := clrText;
-         s := FmtP(t.Last, DigitsFor(t.Last));
+         { MT5 CRYPTO: harga bid MT5, BINANCE: harga Binance }
+         if FSrcMT5 and (MWIndex(t.Base) >= 0) then
+           s := FmtP(FMWBid[MWIndex(t.Base)], FMWDig[MWIndex(t.Base)])
+         else s := FmtP(t.Last, DigitsFor(t.Last));
          cv.TextOut(Rect.Right - cv.TextWidth(s) - 6, Rect.Top + 5, s);
        end;
     2: begin
@@ -3841,6 +4227,15 @@ end;
 
 procedure TMainForm.OnSort(Sender: TObject);
 begin
+  ApplyFilter;
+end;
+
+{ tombol MT5 CRYPTO / BINANCE di atas daftar koin }
+procedure TMainForm.OnSrc(Sender: TObject);
+begin
+  FSrcMT5 := TFlatBtn(Sender).Tag = 1;
+  btnSrcMT5.Down := FSrcMT5;
+  btnSrcBin.Down := not FSrcMT5;
   ApplyFilter;
 end;
 

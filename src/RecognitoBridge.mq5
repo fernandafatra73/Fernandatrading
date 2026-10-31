@@ -74,9 +74,14 @@ double PipSize()
 
 double NormLot(double v)
   {
-   double mn = SymbolInfoDouble(_Symbol, SYMBOL_VOLUME_MIN);
-   double mx = SymbolInfoDouble(_Symbol, SYMBOL_VOLUME_MAX);
-   double st = SymbolInfoDouble(_Symbol, SYMBOL_VOLUME_STEP);
+   return NormLotSym(_Symbol, v);
+  }
+
+double NormLotSym(string sym, double v)
+  {
+   double mn = SymbolInfoDouble(sym, SYMBOL_VOLUME_MIN);
+   double mx = SymbolInfoDouble(sym, SYMBOL_VOLUME_MAX);
+   double st = SymbolInfoDouble(sym, SYMBOL_VOLUME_STEP);
    if(st <= 0) st = 0.01;
    v = MathRound(v / st) * st;
    v = MathMax(mn, MathMin(mx, v));
@@ -292,7 +297,7 @@ void ReadOrder(bool initial)
    if(!FileIsExist(ORDER_FILE, FILE_COMMON)) return;
    int h = FileOpen(ORDER_FILE, FILE_READ | FILE_TXT | FILE_ANSI | FILE_COMMON | FILE_SHARE_READ | FILE_SHARE_WRITE);
    if(h == INVALID_HANDLE) return;
-   string id = "", side = "", otype = "", lotS = "", priceS = "", tm = "";
+   string id = "", side = "", otype = "", lotS = "", priceS = "", tm = "", symS = "";
    while(!FileIsEnding(h))
      {
       string line = FileReadString(h);
@@ -306,6 +311,7 @@ void ReadOrder(bool initial)
       else if(k == "LOT") lotS = v;
       else if(k == "PRICE") priceS = v;
       else if(k == "TIME") tm = v;
+      else if(k == "SYMBOL") symS = v;
      }
    FileClose(h);
    if(id == "" || id == gLastOrd) return;
@@ -318,36 +324,50 @@ void ReadOrder(bool initial)
       AddLog("Order pengguna diabaikan: kedaluwarsa");
       return;
      }
+   // simbol order: dari aplikasi (mis. BTCUSDm) bila ada di MT5, selain itu simbol chart EA
+   string sym = _Symbol;
+   if(symS != "" && symS != _Symbol)
+     {
+      if(!SymbolSelect(symS, true))
+        {
+         gOrdAck = id + ";FAIL;simbol " + symS + " tidak ada di MT5";
+         AddLog("Order pengguna gagal: simbol " + symS + " tidak ada di MT5");
+         return;
+        }
+      sym = symS;
+     }
+   int dg = (int)SymbolInfoInteger(sym, SYMBOL_DIGITS);
+   tradeUser.SetTypeFillingBySymbol(sym);
    bool buy = (side == "BUY");
-   double lot = NormLot(StringToDouble(lotS));
+   double lot = NormLotSym(sym, StringToDouble(lotS));
    bool ok;
    string what;
    if(otype == "PENDING")
      {
-      double px = NormalizeDouble(StringToDouble(priceS), _Digits);
-      double ask = SymbolInfoDouble(_Symbol, SYMBOL_ASK), bid = SymbolInfoDouble(_Symbol, SYMBOL_BID);
+      double px = NormalizeDouble(StringToDouble(priceS), dg);
+      double ask = SymbolInfoDouble(sym, SYMBOL_ASK), bid = SymbolInfoDouble(sym, SYMBOL_BID);
       if(buy)
         {
-         if(px < ask) { ok = tradeUser.BuyLimit(lot, px, _Symbol, 0, 0, ORDER_TIME_GTC, 0, "RTF pengguna"); what = "BUY LIMIT"; }
-         else         { ok = tradeUser.BuyStop(lot, px, _Symbol, 0, 0, ORDER_TIME_GTC, 0, "RTF pengguna");  what = "BUY STOP"; }
+         if(px < ask) { ok = tradeUser.BuyLimit(lot, px, sym, 0, 0, ORDER_TIME_GTC, 0, "RTF pengguna"); what = "BUY LIMIT"; }
+         else         { ok = tradeUser.BuyStop(lot, px, sym, 0, 0, ORDER_TIME_GTC, 0, "RTF pengguna");  what = "BUY STOP"; }
         }
       else
         {
-         if(px > bid) { ok = tradeUser.SellLimit(lot, px, _Symbol, 0, 0, ORDER_TIME_GTC, 0, "RTF pengguna"); what = "SELL LIMIT"; }
-         else         { ok = tradeUser.SellStop(lot, px, _Symbol, 0, 0, ORDER_TIME_GTC, 0, "RTF pengguna");  what = "SELL STOP"; }
+         if(px > bid) { ok = tradeUser.SellLimit(lot, px, sym, 0, 0, ORDER_TIME_GTC, 0, "RTF pengguna"); what = "SELL LIMIT"; }
+         else         { ok = tradeUser.SellStop(lot, px, sym, 0, 0, ORDER_TIME_GTC, 0, "RTF pengguna");  what = "SELL STOP"; }
         }
-      what = StringFormat("%s %.2f %s @ %s", what, lot, _Symbol, DoubleToString(px, _Digits));
+      what = StringFormat("%s %.2f %s @ %s", what, lot, sym, DoubleToString(px, dg));
      }
    else
      {
-      if(buy) ok = tradeUser.Buy(lot, _Symbol, 0, 0, 0, "RTF pengguna");
-      else    ok = tradeUser.Sell(lot, _Symbol, 0, 0, 0, "RTF pengguna");
-      what = StringFormat("%s %.2f %s harga pasar", (buy ? "BUY" : "SELL"), lot, _Symbol);
+      if(buy) ok = tradeUser.Buy(lot, sym, 0, 0, 0, "RTF pengguna");
+      else    ok = tradeUser.Sell(lot, sym, 0, 0, 0, "RTF pengguna");
+      what = StringFormat("%s %.2f %s harga pasar", (buy ? "BUY" : "SELL"), lot, sym);
      }
    uint rc = tradeUser.ResultRetcode();
    if(ok && (rc == TRADE_RETCODE_DONE || rc == TRADE_RETCODE_PLACED || rc == TRADE_RETCODE_DONE_PARTIAL))
      {
-      string res = what + (otype == "PENDING" ? " DIPASANG" : " DIBUKA @ " + DoubleToString(tradeUser.ResultPrice(), _Digits));
+      string res = what + (otype == "PENDING" ? " DIPASANG" : " DIBUKA @ " + DoubleToString(tradeUser.ResultPrice(), dg));
       gOrdAck = id + ";OK;" + res;
       AddLog("ORDER PENGGUNA " + res);
      }
@@ -440,6 +460,14 @@ void WriteStatus(bool alive)
    FileWriteString(h, "PRICE=" + DoubleToString(SymbolInfoDouble(_Symbol, SYMBOL_BID), _Digits) + "\r\n");
    FileWriteString(h, "ASK=" + DoubleToString(SymbolInfoDouble(_Symbol, SYMBOL_ASK), _Digits) + "\r\n");
    FileWriteString(h, "DIGITS=" + IntegerToString(_Digits) + "\r\n");
+   // semua simbol Market Watch (crypto, emas, forex): nama;bid;ask;digits
+   for(int i = 0; i < SymbolsTotal(true); i++)
+     {
+      string ms = SymbolName(i, true);
+      int mdg = (int)SymbolInfoInteger(ms, SYMBOL_DIGITS);
+      FileWriteString(h, "MW=" + ms + ";" + DoubleToString(SymbolInfoDouble(ms, SYMBOL_BID), mdg) + ";" +
+                      DoubleToString(SymbolInfoDouble(ms, SYMBOL_ASK), mdg) + ";" + IntegerToString(mdg) + "\r\n");
+     }
    FileWriteString(h, "ORDACK=" + gOrdAck + "\r\n");
    FileWriteString(h, "AUTO=" + (gAuto ? "1" : "0") + "\r\n");
    FileWriteString(h, "LOTBUY=" + DoubleToString(gLotBuy, 2) + "\r\n");
