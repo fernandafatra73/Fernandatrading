@@ -69,6 +69,7 @@ type
     PLText, PLCap: string;   { untung / rugi MT5 besar di kanan bawah grafik ('' = tidak tampil) }
     PLColor: TColor;
     ModalText: string;   { modal / balance MT5, kuning di kiri bawah grafik ('' = tidak tampil) }
+    ModalCap: string;    { judul kecil di atasnya, mis. MODAL MT5 / MODAL BINANCE }
     BgColor, GridColor, BandColor, TitleColor, FvgColor, FvgPen: TColor;   { warna belakang grafik (tab Edukasi) }
     constructor Create(AOwner: TComponent); override;
     destructor Destroy; override;
@@ -601,7 +602,7 @@ begin
     y := FPlot.Bottom - cv.TextHeight(ModalText) - 4;
     cv.TextOut(FPlot.Left + 12, y, ModalText);
     cv.Font.Size := 9; cv.Font.Color := clrMuted;
-    cv.TextOut(FPlot.Left + 14, y - 6, 'MODAL');
+    cv.TextOut(FPlot.Left + 14, y - 6, ModalCap);
     cv.Font.Size := 8; cv.Font.Style := [];
   end;
 

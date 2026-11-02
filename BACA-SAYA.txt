@@ -14,6 +14,35 @@ SUMBER DATA
   Sumber yang dipakai selalu tertulis di bilah status bawah.
 - Berita: kalender ekonomi online minggu ini + jadwal bawaan FOMC 2026 & NFP.
 
+DAFTAR KOIN (kiri)
+- Halaman BINANCE: semua koin USDT yang aktif diperdagangkan tampil (tanpa batas volume).
+  Koin yang sudah delisted / dihentikan Binance disembunyikan karena grafiknya tidak bisa tersambung.
+- Cari koin: ketik nama koin; tombol X merah di sebelahnya = hapus pencarian (daftar lengkap lagi).
+
+ROBOT ARUS PASAR (bar tepat di bawah grafik)
+- Membaca 1000 transaksi nyata terakhir di Binance (aggTrades) setiap 2 detik dan mengikuti
+  transaksi TERBESAR (10% transaksi paling besar), tidak peduli warna / jumlah candle.
+- Bar: JUAL merah skala 10 (kiri) | BELI hijau skala 10 (kanan). Skor 7-10 = STRONG (warna terang,
+  alarm bila ALARM ON). Di kanan: nilai beli besar vs jual besar, transaksi terbesar, rentang waktu.
+- STOP / LANJUT: LANJUT (dengan konfirmasi) = robot order NYATA otomatis; STOP = tidak membuka posisi baru.
+  STOP FER di kiri bawah juga menghentikan robot. Saat aplikasi dibuka robot selalu STOP.
+- Aturan: robot HANYA mengikuti eksekusi besar yang baru terjadi di pasar (1% transaksi terbesar
+  dari 1000 transaksi terakhir, maks. 30 detik lalu). Eksekusi BELI besar = robot BELI, eksekusi JUAL
+  besar = robot JUAL. Tidak memakai sinyal / indikator lain (skor ARUS & SINYAL hanya tampilan).
+  Eksekusi sebelum LANJUT ditekan atau sebelum ganti koin tidak diikuti.
+  Untung +5 USD = posisi ditutup, rugi -15 USD = stop. Satu posisi sekaligus, jeda 60 detik setelah order.
+- Robot mengikuti tombol navbar yang diklik (muncul pemberitahuan tiap pindah halaman):
+  klik BINANCE = Binance JALAN, MT5 STOP; klik MT5 = MT5 JALAN, Binance STOP;
+  klik INDODAX / EXNESS / TRADE WILL = Binance & MT5 STOP. Status tampil di bar bawah grafik.
+- Robot hanya order di halaman yang AKTIF (tidak keduanya sekaligus):
+  BINANCE = Binance Futures USDT-M, margin & leverage dari isian panel OPEN BINANCE (emas = XAUUSDT).
+            TP/SL dijaga aplikasi tiap 3 detik (aplikasi harus tetap terbuka), juga setelah STOP
+            atau pindah halaman sampai posisi robot tertutup.
+  MT5     = 0.01 lot simbol MT5 koin di grafik; TP +5 / SL -15 dipasang EA langsung di broker.
+            Butuh EA versi baru: tab MT5 > Pasang EA ke MT5 > Compile (F7) > pasang ulang ke chart.
+            Robot tidak membuka posisi bila simbol itu sudah punya posisi dari aplikasi.
+  INDODAX / EXNESS / TRADE WILL = robot tidak order.
+
 KONTROL GRAFIK
 - Drag kiri/kanan          : geser waktu
 - Scroll mouse             : zoom candle kecil/besar
@@ -31,36 +60,71 @@ ALARM
 - Tambah jadwal berita sendiri di events.txt (format ada di dalam file).
 
 MT5 EXNESS (tab MT5) - ORDER ROBOT ATAS PERINTAH PENGGUNA
-- Order robot DINONAKTIFKAN PERMANEN: EA tidak pernah beli / jual sendiri. Tombol di chart
+- Order robot pola candle di EA DINONAKTIFKAN PERMANEN: EA tidak pernah beli / jual sendiri. Tombol di chart
   MT5 bertuliskan ROBOT NONAKTIF. EA hanya menghubungkan aplikasi dengan MT5.
+  (Satu-satunya order otomatis = ROBOT ARUS PASAR di aplikasi, hanya setelah LANJUT ditekan.)
 - Yang trading hanya pengguna (OPEN / EKSEKUSI di aplikasi, atau langsung di MT5).
   Algo Trading di MT5 tetap harus ON agar order dari aplikasi bisa dieksekusi.
 - Status di bar bawah aplikasi: ORDER ROBOT: MATI.
-- KONEKSI MT5 (sebelah TRADE WILL): hijau = terhubung, merah = belum. Klik untuk cek:
+- KONEKSI MT5: hijau = terhubung, merah = belum. Klik untuk cek:
   "Sudah terhubung Fatra73" / "Belom terhubung lagi ngambek Ho".
 - PERSENTASE (di bawah KONEKSI MT5): perbandingan volume 200 candle terakhir di zona
   10 pip di ATAS harga vs 10 pip di BAWAH harga. Hijau = BAWAH lebih besar (penopang beli),
   merah = ATAS lebih besar (tekanan jual), kuning = seimbang (45-55%).
-- MT5 CRYPTO / BINANCE (di atas daftar koin kiri): MT5 CRYPTO = crypto yang ada di Market
-  Watch MT5 (nama & harga MT5, mis. BTCUSDm); BINANCE = semua koin Binance seperti biasa.
-  Tambah koin di MT5: klik kanan Market Watch > Symbols. Grafik tetap memakai data Binance.
-- OPEN BINANCE (di bawah OPEN): order NYATA ke akun Binance Spot untuk koin di grafik
-  (emas = PAXGUSDT). BELI / JUAL, HARGA PASAR atau LIMIT, jumlah dalam USDT (min. ~5),
-  CEK SALDO, dan EKSEKUSI selalu dengan konfirmasi.
-  API KEY: buat di Binance > API Management, centang HANYA "Spot & Margin Trading",
-  JANGAN izinkan Withdraw. Key & secret tersimpan di binance.ini (tidak ikut ke GitHub,
-  jangan dibagikan).
+- NAVBAR HALAMAN (paling atas): BINANCE (kuning) | MT5 (hijau) | INDODAX (biru) |
+  EXNESS (oranye) | TRADE WILL (ungu).
+  Tiap halaman terpisah dan ingat koinnya sendiri:
+  BINANCE = grafik, daftar koin, harga & saldo dari Binance, tombol OPEN BINANCE.
+  MT5 = grafik dari candle MT5 asli (dikirim EA, mis. XAUUSDm / BTCUSDm), daftar crypto
+        Market Watch MT5, harga MT5, modal & untung / rugi MT5, tombol OPEN (order MT5).
+        Tambah koin: di MT5 klik kanan Market Watch > Symbols.
+  INDODAX, EXNESS, TRADE WILL = halaman masing-masing (isi menyusul).
+  DAFTAR KOIN kiri mengikuti halaman: BINANCE = koin Binance, MT5 = semua simbol Market Watch MT5
+  (BTCUSDm, XAUUSDm, forex, dll.; 24j % dari Binance bila koinnya ada), INDODAX = koin Indodax
+  harga Rupiah (API publik, tiap 30 detik), EXNESS = semua simbol akun Exness.
+  INDODAX = grafik koin Indodax (IDR, tradingview Indodax) dengan MA, TF, BOLL, BOS/CHoCH, FVG,
+            sinyal & analisa; klik koin = grafiknya. Tombol AKUN INDODAX / GRAFIK = saldo & aset akun.
+- NAVBAR: SEMBUNYIKAN / TAMPILKAN KOIN di ujung kiri, SEMBUNYIKAN / TAMPILKAN ANALISA di ujung kanan.
+  EXNESS = grafik Exness asli dari MT5 (MT5 login ke server Exness) dengan MA, TF, BOLL, BOS/CHoCH,
+           FVG, sinyal & analisa; daftar koin = SEMUA simbol akun Exness (dikirim EA tiap 60 detik,
+           butuh EA versi 1.50), klik koin = grafiknya. OPEN = order ke akun Exness lewat EA.
+           Tombol WEB TRADING / GRAFIK: pindah ke Exness web trading (my.extrade.global/webtrading)
+           yang tampil DI DALAM aplikasi (Microsoft Edge mode aplikasi yang ditanam; login tersimpan
+           di folder ExnessWeb, tidak ikut ke GitHub). MUAT ULANG = buka ulang, BUKA DI BROWSER = cadangan.
+           Robot arus pasar tidak order di halaman EXNESS.
+- OPEN BINANCE (di bawah OPEN): order NYATA ke akun Binance untuk koin di grafik.
+  SPOT (emas = PAXGUSDT): BELI / JUAL senilai USDT (min. ~5).
+  FUTURES USDT-M (emas = XAUUSDT): LONG / SHORT, Margin USDT x Leverage. Leverage = pilihan
+  dropdown 1x .. maks koin yang aktif (mis. XAUUSDT maks 100x, BTCUSDT maks 150x), otomatis
+  terpilih sesuai yang terpasang di akun Binance; bila diganti, leverage Binance ikut diubah saat order.
+  HARGA PASAR atau LIMIT, CEK SALDO, EKSEKUSI selalu dengan konfirmasi.
+  PINDAH SALDO USDT antar dompet sendiri: Spot -> Futures atau Futures -> Spot, 50% atau SEMUA
+  (dengan konfirmasi).
+  Baris API menampilkan izin key: Spot / Fut / Transfer = OK atau TIDAK.
+  Satu kolom di sisi paling kanan: panel order di atas, ORDER BOOK harga di bawahnya
+  sampai bawah layar. Di order book: klik harga merah = BELI LIMIT,
+  klik harga hijau = JUAL LIMIT di harga itu (dengan konfirmasi; centang 1-KLIK untuk
+  langsung order tanpa konfirmasi - hati-hati).
+  API KEY (tombol KEY): buat di Binance > API Management > Edit restrictions, centang
+  "Enable Spot & Margin Trading", "Enable Futures", dan "Permits Universal Transfer"
+  (Binance biasanya mewajibkan "Restrict access to trusted IPs only" untuk izin ini).
+  JANGAN izinkan Withdraw. Key & secret tersimpan di binance.ini
+  (tidak ikut ke GitHub, jangan dibagikan).
 - OPEN (order MT5, mengikuti grafik: emas -> XAUUSDm, crypto -> simbol MT5-nya mis. BTCUSDm):
   klik -> panel BELI / JUAL, bar persentase beli / jual
   (volume 50 candle terakhir), lalu OTOMATIS (harga pasar, langsung eksekusi) atau
   PENDING (harga digeser dengan slider / tombol - +, otomatis BUY/SELL LIMIT atau STOP),
   pilihan lot, dan tombol EKSEKUSI (selalu dengan konfirmasi). Order tanpa SL / TP.
   Order dikirim lewat EA; order yang lebih tua dari 20 detik tidak dieksekusi.
-- UNTUNG / RUGI MT5 (di sebelah tombol TRADE WILL): total plus / minus semua posisi
+- UNTUNG / RUGI MT5 (di sebelah tombol KONEKSI MT5): total plus / minus semua posisi
   terbuka akun, termasuk order manual / dari web terminal. Hijau = untung, merah = rugi.
-  Juga tampil besar (4x) di kanan bawah grafik selama ada posisi terbuka.
-- MODAL (kuning, kiri bawah grafik): equity MT5 = balance + untung / rugi posisi terbuka.
-  Berkurang saat minus, bertambah saat plus.
+  Juga tampil besar (4x) di kanan bawah grafik selama ada posisi terbuka (mode MT5 CRYPTO).
+- MODAL & HARGA mengikuti halaman navbar:
+  MT5 = harga besar dari MT5, MODAL MT5 (kuning, kiri bawah grafik) = equity MT5
+  (balance + untung / rugi posisi terbuka), plus untung / rugi MT5 di kanan bawah.
+  BINANCE = harga besar dari Binance, MODAL BINANCE (Spot) = saldo USDT Binance Spot
+  (dibaca tiap 10 detik, butuh API key), plus UNTUNG / RUGI BINANCE = untung / rugi berjalan
+  semua posisi Futures (di atas & besar di kanan bawah grafik; belum ada posisi = 0.00 USDT).
 - Syarat: MT5 desktop terbuka & login, EA RecognitoBridge dipasang di salah satu chart.
   Pasang: tab MT5 > Pasang EA ke MT5 > di MT5 Refresh / Compile (F7) > seret EA ke chart.
 

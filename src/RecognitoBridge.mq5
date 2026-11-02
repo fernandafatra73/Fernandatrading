@@ -17,7 +17,7 @@
 //|   RecognitoStatus.txt (status dari EA)                            |
 //+------------------------------------------------------------------+
 #property copyright "Created By: Fernanda Fatria Fatra,SST.MM"
-#property version   "1.30"
+#property version   "1.50"
 #property description "Fernanda Trading Recognito: BuE/CHoCH naik -> BUY (tutup di BBC ke-3), BeE/CHoCH turun -> SELL (tutup di BWS ke-3)"
 
 #include <Trade\Trade.mqh>
@@ -33,6 +33,9 @@ input int    InpSlippage     = 30;       // Slippage (points)
 #define STATUS_FILE "RecognitoStatus.txt"
 #define PFX         "RTF_"
 #define ORDER_FILE  "RecognitoOrder.txt"   // order manual dari aplikasi (diklik pengguna)
+#define CHARTREQ_FILE "RecognitoChartReq.txt"   // grafik halaman MT5: simbol & timeframe yang diminta aplikasi
+#define CANDLE_FILE   "RecognitoCandles.txt"    // candle MT5 untuk grafik aplikasi
+#define SYMBOLS_FILE  "RecognitoSymbols.txt"    // semua simbol akun (halaman EXNESS di aplikasi)
 #define USER_MAGIC  20261030               // magic order pengguna (bukan robot)
 
 CTrade   trade;
@@ -297,7 +300,7 @@ void ReadOrder(bool initial)
    if(!FileIsExist(ORDER_FILE, FILE_COMMON)) return;
    int h = FileOpen(ORDER_FILE, FILE_READ | FILE_TXT | FILE_ANSI | FILE_COMMON | FILE_SHARE_READ | FILE_SHARE_WRITE);
    if(h == INVALID_HANDLE) return;
-   string id = "", side = "", otype = "", lotS = "", priceS = "", tm = "", symS = "";
+   string id = "", side = "", otype = "", lotS = "", priceS = "", tm = "", symS = "", tpS = "", slS = "";
    while(!FileIsEnding(h))
      {
       string line = FileReadString(h);
@@ -312,6 +315,8 @@ void ReadOrder(bool initial)
       else if(k == "PRICE") priceS = v;
       else if(k == "TIME") tm = v;
       else if(k == "SYMBOL") symS = v;
+      else if(k == "TPUSD") tpS = v;
+      else if(k == "SLUSD") slS = v;
      }
    FileClose(h);
    if(id == "" || id == gLastOrd) return;
@@ -360,9 +365,28 @@ void ReadOrder(bool initial)
      }
    else
      {
-      if(buy) ok = tradeUser.Buy(lot, sym, 0, 0, 0, "RTF pengguna");
-      else    ok = tradeUser.Sell(lot, sym, 0, 0, 0, "RTF pengguna");
+      // robot arus pasar: TP / SL dalam uang (USD) -> harga TP / SL di broker
+      double tpUsd = StringToDouble(tpS), slUsd = StringToDouble(slS), tp = 0, sl = 0;
+      if(tpUsd > 0 || slUsd > 0)
+        {
+         double tv = SymbolInfoDouble(sym, SYMBOL_TRADE_TICK_VALUE), ts = SymbolInfoDouble(sym, SYMBOL_TRADE_TICK_SIZE);
+         if(tv <= 0 || ts <= 0)
+           {
+            gOrdAck = id + ";FAIL;nilai tick " + sym + " tidak terbaca - TP/SL tidak bisa dihitung";
+            AddLog("Order robot gagal: nilai tick " + sym + " tidak terbaca");
+            return;
+           }
+         double perPrice = lot * tv / ts;   // untung / rugi per 1.0 pergerakan harga
+         double px0 = buy ? SymbolInfoDouble(sym, SYMBOL_ASK) : SymbolInfoDouble(sym, SYMBOL_BID);
+         double minDist = (double)SymbolInfoInteger(sym, SYMBOL_TRADE_STOPS_LEVEL) * SymbolInfoDouble(sym, SYMBOL_POINT);
+         if(tpUsd > 0) { double d = MathMax(tpUsd / perPrice, minDist); tp = NormalizeDouble(buy ? px0 + d : px0 - d, dg); }
+         if(slUsd > 0) { double d = MathMax(slUsd / perPrice, minDist); sl = NormalizeDouble(buy ? px0 - d : px0 + d, dg); }
+        }
+      if(buy) ok = tradeUser.Buy(lot, sym, 0, sl, tp, (tp > 0 ? "RTF robot" : "RTF pengguna"));
+      else    ok = tradeUser.Sell(lot, sym, 0, sl, tp, (tp > 0 ? "RTF robot" : "RTF pengguna"));
       what = StringFormat("%s %.2f %s harga pasar", (buy ? "BUY" : "SELL"), lot, sym);
+      if(tp > 0 || sl > 0)
+         what += StringFormat("  TP %s (+%.2f)  SL %s (-%.2f)", DoubleToString(tp, dg), tpUsd, DoubleToString(sl, dg), slUsd);
      }
    uint rc = tradeUser.ResultRetcode();
    if(ok && (rc == TRADE_RETCODE_DONE || rc == TRADE_RETCODE_PLACED || rc == TRADE_RETCODE_DONE_PARTIAL))
@@ -469,6 +493,7 @@ void WriteStatus(bool alive)
                       DoubleToString(SymbolInfoDouble(ms, SYMBOL_ASK), mdg) + ";" + IntegerToString(mdg) + "\r\n");
      }
    FileWriteString(h, "ORDACK=" + gOrdAck + "\r\n");
+   FileWriteString(h, "RTFVER=3\r\n");   // 2 = TP / SL dalam USD (robot arus pasar), 3 = + daftar simbol Exness
    FileWriteString(h, "AUTO=" + (gAuto ? "1" : "0") + "\r\n");
    FileWriteString(h, "LOTBUY=" + DoubleToString(gLotBuy, 2) + "\r\n");
    FileWriteString(h, "LOTSELL=" + DoubleToString(gLotSell, 2) + "\r\n");
@@ -585,10 +610,91 @@ void OnTick()
    CheckNewBar();
   }
 
+//+------------------------------------------------------------------+
+//| Grafik halaman MT5 di aplikasi: candle MT5 asli                    |
+//+------------------------------------------------------------------+
+ENUM_TIMEFRAMES TfFromStr(string s)
+  {
+   if(s == "M1")  return PERIOD_M1;
+   if(s == "M5")  return PERIOD_M5;
+   if(s == "M15") return PERIOD_M15;
+   if(s == "M30") return PERIOD_M30;
+   if(s == "H4")  return PERIOD_H4;
+   if(s == "D1")  return PERIOD_D1;
+   if(s == "W1")  return PERIOD_W1;
+   return PERIOD_H1;
+  }
+
+// tulis candle simbol & timeframe yang diminta aplikasi (waktu dalam ms UTC), diakhiri END
+void ChartFeed()
+  {
+   if(!FileIsExist(CHARTREQ_FILE, FILE_COMMON)) return;
+   int h = FileOpen(CHARTREQ_FILE, FILE_READ | FILE_TXT | FILE_ANSI | FILE_COMMON | FILE_SHARE_READ | FILE_SHARE_WRITE);
+   if(h == INVALID_HANDLE) return;
+   string sym = "", tf = "H1";
+   int cnt = 1000;
+   while(!FileIsEnding(h))
+     {
+      string line = FileReadString(h);
+      int p = StringFind(line, "=");
+      if(p < 0) continue;
+      string k = StringSubstr(line, 0, p), v = StringSubstr(line, p + 1);
+      StringTrimLeft(v); StringTrimRight(v);
+      if(k == "SYMBOL") sym = v;
+      else if(k == "TF") tf = v;
+      else if(k == "N") cnt = (int)StringToInteger(v);
+     }
+   FileClose(h);
+   if(sym == "" || !SymbolSelect(sym, true)) return;
+   MqlRates r[];
+   int n = CopyRates(sym, TfFromStr(tf), 0, MathMax(50, MathMin(cnt, 2000)), r);
+   if(n <= 0) return;
+   // jam server broker -> UTC (dibulatkan ke 15 menit)
+   long off = (long)(MathRound((double)(TimeTradeServer() - TimeGMT()) / 900.0) * 900);
+   int dg = (int)SymbolInfoInteger(sym, SYMBOL_DIGITS);
+   h = FileOpen(CANDLE_FILE, FILE_WRITE | FILE_TXT | FILE_ANSI | FILE_COMMON | FILE_SHARE_READ);
+   if(h == INVALID_HANDLE) return;
+   FileWriteString(h, "SYMBOL=" + sym + "\r\nTF=" + tf + "\r\nDIGITS=" + IntegerToString(dg) + "\r\n");
+   for(int i = 0; i < n; i++)
+      FileWriteString(h, StringFormat("%I64d;%s;%s;%s;%s;%I64d\r\n", ((long)r[i].time - off) * 1000,
+                      DoubleToString(r[i].open, dg), DoubleToString(r[i].high, dg), DoubleToString(r[i].low, dg),
+                      DoubleToString(r[i].close, dg), r[i].tick_volume));
+   FileWriteString(h, "END\r\n");
+   FileClose(h);
+  }
+
+//+------------------------------------------------------------------+
+//| Halaman EXNESS di aplikasi: SEMUA simbol akun (bukan hanya        |
+//| Market Watch): nama;bid;digit;kategori, ditulis tiap 60 detik     |
+//+------------------------------------------------------------------+
+datetime gSymAt = 0;
+void SymbolsFeed()
+  {
+   if(TimeLocal() - gSymAt < 60) return;
+   gSymAt = TimeLocal();
+   int h = FileOpen(SYMBOLS_FILE, FILE_WRITE | FILE_TXT | FILE_ANSI | FILE_COMMON | FILE_SHARE_READ);
+   if(h == INVALID_HANDLE) return;
+   int n = SymbolsTotal(false);
+   for(int i = 0; i < n; i++)
+     {
+      string s = SymbolName(i, false);
+      string path = SymbolInfoString(s, SYMBOL_PATH);
+      int p = StringFind(path, "\\");
+      string cat = (p > 0) ? StringSubstr(path, 0, p) : path;
+      int dg = (int)SymbolInfoInteger(s, SYMBOL_DIGITS);
+      FileWriteString(h, "S=" + s + ";" + DoubleToString(SymbolInfoDouble(s, SYMBOL_BID), dg) + ";" +
+                      IntegerToString(dg) + ";" + cat + "\r\n");
+     }
+   FileWriteString(h, "END\r\n");
+   FileClose(h);
+  }
+
 void OnTimer()
   {
    ReadCommand(false);
    ReadOrder(false);
+   ChartFeed();
+   SymbolsFeed();
    CheckNewBar();
    WriteStatus(true);
    Comment(StringFormat("Fernanda Trading Recognito\nAuto trade: %s   Tren: %s\nBUY: %d   SELL: %d\nEvent terakhir: %s",

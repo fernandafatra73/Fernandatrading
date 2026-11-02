@@ -53,8 +53,26 @@ type
     Last, Chg, High, Low, QVol, Pos: Double;
     Status: Integer;        { 1 breakout, -1 breakdown, 0 normal }
     IsGold: Boolean;
+    CloseT: Int64;          { closeTime ticker (ms UTC); lama = koin sudah tidak diperdagangkan }
   end;
   TTickers = array of TTicker;
+
+  { robot arus pasar: transaksi nyata terakhir (aggTrades), siapa pemukul harga terbesar }
+  TFlow = record
+    OK: Boolean;
+    N: Integer;                      { jumlah transaksi dibaca }
+    Buy, Sell: Double;               { nilai (USDT) semua transaksi beli / jual pasar }
+    BigBuy, BigSell: Double;         { nilai transaksi besar (10% terbesar) beli / jual }
+    MaxQ: Double; MaxSide: Integer;  { transaksi tunggal terbesar & arahnya (1 beli, -1 jual) }
+    SpanSec: Double;                 { rentang waktu transaksi yang dibaca }
+    Score: Integer;                  { -10 (jual kuat) .. +10 (beli kuat) }
+    { eksekusi besar (1% transaksi terbesar) yang paling baru: pemicu robot }
+    BigCut: Double;                  { batas nilai eksekusi besar (USDT) }
+    LastBigID: Int64;                { id aggTrade; 0 = tidak ada }
+    LastBigSide: Integer;            { 1 beli pasar, -1 jual pasar }
+    LastBigQ: Double;                { nilai (USDT) }
+    LastBigAge: Double;              { detik sebelum transaksi terbaru }
+  end;
 
   TCross = record
     Fast, Slow: Integer;
@@ -94,6 +112,7 @@ function DurStr(Sec: Double): string;
 function ParseKlines(const S: string; var A: TCandles): Boolean;
 function ParseTickers(const S: string; var A: TTickers): Integer;
 function JStr(const S: string; P1, P2: Integer; const Key: string): string;
+function ComputeFlow(const S: string): TFlow;
 
 function SMA(const A: TCandles; Per: Integer): TDArr;
 procedure Bollinger(const A: TCandles; Per: Integer; K: Double; var Up, Mid, Lo: TDArr);
@@ -145,9 +164,42 @@ end;
 
 { ---------------- Parsing JSON sederhana ---------------- }
 
+// Indodax tradingview/history_v2: [ {"Time":detik,"Open":..,"High":..,"Low":..,"Close":..,"Volume":".."}, .. ]
+function ParseIdxCandles(const S: string; var A: TCandles): Boolean;
+var p, q, cnt: Integer;
+begin
+  cnt := 0;
+  SetLength(A, 1600);
+  p := 1;
+  while True do
+  begin
+    p := PosEx('{', S, p);
+    if p = 0 then Break;
+    q := PosEx('}', S, p);
+    if q = 0 then Break;
+    if cnt >= Length(A) then SetLength(A, cnt * 2);
+    A[cnt].T := StrToInt64Def(JStr(S, p, q, 'Time'), 0) * 1000;
+    A[cnt].O := PF(JStr(S, p, q, 'Open'));
+    A[cnt].H := PF(JStr(S, p, q, 'High'));
+    A[cnt].L := PF(JStr(S, p, q, 'Low'));
+    A[cnt].C := PF(JStr(S, p, q, 'Close'));
+    A[cnt].V := PF(JStr(S, p, q, 'Volume'));
+    if (A[cnt].T > 0) and (A[cnt].C > 0) then Inc(cnt);
+    p := q + 1;
+  end;
+  SetLength(A, cnt);
+  Result := cnt > 0;
+end;
+
 function ParseKlines(const S: string; var A: TCandles): Boolean;
 var p, len, f, st, cnt: Integer; fields: array[0..5] of string;
 begin
+  { format Indodax (objek) dikenali dari kunci "Time" }
+  if Pos('"Time":', S) > 0 then
+  begin
+    Result := ParseIdxCandles(S, A);
+    Exit;
+  end;
   Result := False;
   len := Length(S); p := 1; cnt := 0;
   while (p <= len) and (S[p] <> '[') do Inc(p);
@@ -234,6 +286,7 @@ begin
       High := PF(JStr(S, p, q, 'highPrice'));
       Low := PF(JStr(S, p, q, 'lowPrice'));
       QVol := PF(JStr(S, p, q, 'quoteVolume'));
+      CloseT := StrToInt64Def(JStr(S, p, q, 'closeTime'), 0);
       Base := Sym;
       Status := 0; Pos := 0.5; IsGold := False;
       if High > Low then Pos := (Last - Low) / (High - Low);
@@ -243,6 +296,83 @@ begin
   end;
   SetLength(A, cnt);
   Result := cnt;
+end;
+
+// aggTrades: [ {"a":..,"p":"harga","q":"jumlah","T":waktu,"m":true/false}, ... ]
+// m = true -> pembeli adalah maker, berarti penjual yang memukul harga (JUAL pasar).
+// Skor mengikuti transaksi besar (10% terbesar), tidak peduli warna candle.
+function ComputeFlow(const S: string): TFlow;
+var p, q, n, i, k, gap: Integer; v, t0, t1, tt, cut, tmp: Double;
+    vals: TDArr; sides: array of Integer;
+begin
+  FillChar(Result, SizeOf(Result), 0);
+  n := 0; t0 := 0; t1 := 0;
+  SetLength(vals, 1000); SetLength(sides, 1000);
+  p := 1;
+  while True do
+  begin
+    p := PosEx('{', S, p);
+    if p = 0 then Break;
+    q := PosEx('}', S, p);
+    if q = 0 then Break;
+    v := PF(JStr(S, p, q, 'p')) * PF(JStr(S, p, q, 'q'));
+    tt := PF(JStr(S, p, q, 'T'));
+    if v > 0 then
+    begin
+      if n >= Length(vals) then begin SetLength(vals, n * 2); SetLength(sides, n * 2); end;
+      vals[n] := v;
+      if JStr(S, p, q, 'm') = 'true' then sides[n] := -1 else sides[n] := 1;
+      if sides[n] > 0 then Result.Buy := Result.Buy + v else Result.Sell := Result.Sell + v;
+      if v > Result.MaxQ then begin Result.MaxQ := v; Result.MaxSide := sides[n]; end;
+      if (t0 = 0) or (tt < t0) then t0 := tt;
+      if tt > t1 then t1 := tt;
+      Inc(n);
+    end;
+    p := q + 1;
+  end;
+  Result.N := n;
+  if n = 0 then Exit;
+  Result.OK := True;
+  Result.SpanSec := (t1 - t0) / 1000;
+  { batas transaksi besar = nilai di persentil 90 }
+  SetLength(vals, n);
+  gap := n div 2;
+  while gap > 0 do
+  begin
+    for i := gap to n - 1 do
+    begin
+      tmp := vals[i]; k := i;
+      while (k >= gap) and (vals[k - gap] > tmp) do begin vals[k] := vals[k - gap]; Dec(k, gap); end;
+      vals[k] := tmp;
+    end;
+    gap := gap div 2;
+  end;
+  cut := vals[Min(n - 1, (n * 9) div 10)];
+  Result.BigCut := vals[Min(n - 1, (n * 99) div 100)];
+  { hitung ulang per sisi dari teks (vals sudah diurutkan, sides tidak);
+    transaksi urut dari lama ke baru, jadi eksekusi besar terakhir = yang paling baru }
+  p := 1;
+  while True do
+  begin
+    p := PosEx('{', S, p);
+    if p = 0 then Break;
+    q := PosEx('}', S, p);
+    if q = 0 then Break;
+    v := PF(JStr(S, p, q, 'p')) * PF(JStr(S, p, q, 'q'));
+    if (v > 0) and (v >= cut) then
+      if JStr(S, p, q, 'm') = 'true' then Result.BigSell := Result.BigSell + v
+      else Result.BigBuy := Result.BigBuy + v;
+    if (v > 0) and (v >= Result.BigCut) then
+    begin
+      Result.LastBigID := StrToInt64Def(JStr(S, p, q, 'a'), 0);
+      if JStr(S, p, q, 'm') = 'true' then Result.LastBigSide := -1 else Result.LastBigSide := 1;
+      Result.LastBigQ := v;
+      Result.LastBigAge := (t1 - PF(JStr(S, p, q, 'T'))) / 1000;
+    end;
+    p := q + 1;
+  end;
+  if Result.BigBuy + Result.BigSell > 0 then
+    Result.Score := EnsureRange(Round(10 * (Result.BigBuy - Result.BigSell) / (Result.BigBuy + Result.BigSell)), -10, 10);
 end;
 
 { ---------------- Indikator ---------------- }

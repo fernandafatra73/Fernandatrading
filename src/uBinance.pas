@@ -7,7 +7,7 @@ unit uBinance;
 
 interface
 
-uses Windows, SysUtils, Classes, WinInet, Math;
+uses Windows, SysUtils, Classes, WinInet, Math, StrUtils;
 
 function SHA256Hex(const S: string): string;
 function HmacSHA256Hex(const Key, Msg: string): string;
@@ -21,6 +21,62 @@ function BinKeyMasked: string;
 function BinBalances(const Base: string; out FreeUSDT, FreeBase: Double; out Msg: string): Boolean;
 { Side 'BUY' / 'SELL', OType 'MARKET' / 'LIMIT'; Usdt = nilai order dalam USDT }
 function BinOrder(const Sym, Side, OType: string; Usdt, LimitPrice: Double; out Msg: string): Boolean;
+
+{ Futures USDT-M: saldo USDT tersedia di dompet Futures }
+function BinFutBalance(out Avail: Double; out Msg: string): Boolean;
+{ Futures USDT-M: leverage yang sedang dipasang di akun Binance untuk simbol + leverage maksimum }
+function BinFutLeverage(const Sym: string; out Lev, MaxLev: Integer; out Msg: string): Boolean;
+{ pindah USDT antar dompet sendiri: ToFutures = Spot -> Futures USDT-M, selain itu Futures -> Spot
+  (API key butuh izin "Permits Universal Transfer") }
+function BinTransfer(ToFutures: Boolean; Amount: Double; out Msg: string): Boolean;
+{ izin API key (hanya baca): Spot trading, Futures, transfer antar dompet }
+function BinApiPerms(out Spot, Fut, Transfer: Boolean; out Msg: string): Boolean;
+{ Futures USDT-M: Margin = USDT yang dipakai, nilai posisi = Margin x Lev }
+function BinFutOrder(const Sym, Side, OType: string; Margin: Double; Lev: Integer;
+  LimitPrice: Double; out Msg: string): Boolean;
+{ Futures USDT-M: total untung / rugi berjalan (unrealized PnL) semua posisi terbuka }
+function BinFutPnl(out Pnl: Double; out NPos: Integer; out Msg: string): Boolean;
+
+{ Futures USDT-M: posisi satu simbol (Amt > 0 long, < 0 short, 0 = tidak ada) + untung / rugi berjalan }
+function BinFutPosition(const Sym: string; out Amt, Pnl: Double; out PosSide, Msg: string): Boolean;
+{ Futures USDT-M: tutup posisi simbol dengan harga pasar }
+function BinFutClose(const Sym: string; Amt: Double; const PosSide: string; out Msg: string): Boolean;
+
+type
+  { robot arus pasar (Binance Futures) di latar belakang: Act 0 = cek posisi,
+    1 / -1 = buka BELI / JUAL pasar (Margin x Lev), 2 = tutup posisi }
+  TBinRobDone = procedure(Act: Integer; OK: Boolean; const Sym: string; Amt, Pnl: Double;
+    const PosSide, Msg: string) of object;
+  TBinRobThread = class(TThread)
+  private
+    FAct, FLev: Integer;
+    FSym, FPosSide, FMsg: string;
+    FMargin, FAmt, FPnl: Double;
+    FOK: Boolean;
+    FDone: TBinRobDone;
+    procedure DoDone;
+  protected
+    procedure Execute; override;
+  public
+    constructor Create(Act: Integer; const Sym: string; Margin: Double; Lev: Integer;
+      Amt: Double; const PosSide: string; Done: TBinRobDone);
+  end;
+
+  { baca saldo Spot + untung / rugi Futures di latar belakang (tidak membekukan aplikasi) }
+  TBinBalDone = procedure(OK: Boolean; USDT, BaseAmt, Pnl: Double; NPos: Integer; const Msg: string) of object;
+  TBinBalThread = class(TThread)
+  private
+    FBase, FMsg: string;
+    FOK: Boolean;
+    FUSDT, FAmt, FPnl: Double;
+    FNPos: Integer;
+    FDone: TBinBalDone;
+    procedure DoDone;
+  protected
+    procedure Execute; override;
+  public
+    constructor Create(const Base: string; Done: TBinBalDone);
+  end;
 
 implementation
 
@@ -179,7 +235,11 @@ begin
     InternetSetOption(hNet, INTERNET_OPTION_CONNECT_TIMEOUT, @t, SizeOf(t));
     InternetSetOption(hNet, INTERNET_OPTION_RECEIVE_TIMEOUT, @t, SizeOf(t));
     InternetSetOption(hNet, INTERNET_OPTION_SEND_TIMEOUT, @t, SizeOf(t));
-    hCon := InternetConnect(hNet, 'api.binance.com', INTERNET_DEFAULT_HTTPS_PORT, nil, nil, INTERNET_SERVICE_HTTP, 0, 0);
+    { /fapi/... = Futures USDT-M, selain itu Spot }
+    if Copy(Path, 1, 6) = '/fapi/' then
+      hCon := InternetConnect(hNet, 'fapi.binance.com', INTERNET_DEFAULT_HTTPS_PORT, nil, nil, INTERNET_SERVICE_HTTP, 0, 0)
+    else
+      hCon := InternetConnect(hNet, 'api.binance.com', INTERNET_DEFAULT_HTTPS_PORT, nil, nil, INTERNET_SERVICE_HTTP, 0, 0);
     if hCon = nil then Exit;
     try
       url := Path;
@@ -366,6 +426,302 @@ begin
     [Side, OType, Sym, JStr(d, 'status'), JStr(d, 'executedQty'), JStr(d, 'orderId')]);
   if OType = 'LIMIT' then Msg := Msg + '  @ ' + JStr(d, 'price');
   Result := True;
+end;
+
+{ ---------------- Futures USDT-M (fapi.binance.com) ---------------- }
+
+var
+  FutSym: string;          { cache aturan simbol futures terakhir }
+  FutStep, FutTick: Double;
+
+function FutFilters(const Sym: string; out Step, Tick: Double): Boolean;
+var d: string; c, p, q: Integer;
+begin
+  if (Sym = FutSym) and (FutStep > 0) then
+  begin
+    Step := FutStep; Tick := FutTick;
+    Result := True;
+    Exit;
+  end;
+  Step := 0; Tick := 0;
+  Result := BinHttp('GET', '/fapi/v1/exchangeInfo', '', d, c);
+  if not Result then Exit;
+  p := Pos('"symbol":"' + Sym + '"', d);
+  if p = 0 then begin Result := False; Exit; end;
+  q := PosEx('"filterType":"PRICE_FILTER"', d, p);
+  if q > 0 then Tick := PF(JStr(d, 'tickSize', q));
+  q := PosEx('"filterType":"LOT_SIZE"', d, p);
+  if q > 0 then Step := PF(JStr(d, 'stepSize', q));
+  Result := (Step > 0) and (Tick > 0);
+  if Result then begin FutSym := Sym; FutStep := Step; FutTick := Tick; end;
+end;
+
+function BinApiPerms(out Spot, Fut, Transfer: Boolean; out Msg: string): Boolean;
+var d: string; c: Integer;
+begin
+  Spot := False; Fut := False; Transfer := False;
+  Result := False;
+  if not BinHasKeys then begin Msg := 'API key Binance belum diisi'; Exit; end;
+  if not Signed('GET', '/sapi/v1/account/apiRestrictions', '', d, c) then
+  begin
+    Msg := ErrMsg(d, c);
+    Exit;
+  end;
+  Spot := JStr(d, 'enableSpotAndMarginTrading') = 'true';
+  Fut := JStr(d, 'enableFutures') = 'true';
+  Transfer := JStr(d, 'permitsUniversalTransfer') = 'true';
+  Msg := '';
+  Result := True;
+end;
+
+function BinTransfer(ToFutures: Boolean; Amount: Double; out Msg: string): Boolean;
+var d, q, amt: string; c: Integer;
+begin
+  Result := False;
+  if not BinHasKeys then begin Msg := 'API key Binance belum diisi'; Exit; end;
+  { dibulatkan ke bawah 6 desimal supaya tidak melebihi saldo }
+  amt := FormatFloat('0.######', Floor(Amount * 1000000) / 1000000);
+  if StrToFloatDef(amt, 0) <= 0 then begin Msg := 'saldo kosong'; Exit; end;
+  if ToFutures then q := 'type=MAIN_UMFUTURE' else q := 'type=UMFUTURE_MAIN';
+  q := q + '&asset=USDT&amount=' + amt;
+  if not Signed('POST', '/sapi/v1/asset/transfer', q, d, c) then
+  begin
+    Msg := ErrMsg(d, c);
+    Exit;
+  end;
+  if ToFutures then Msg := amt + ' USDT dipindah Spot -> Futures'
+  else Msg := amt + ' USDT dipindah Futures -> Spot';
+  Msg := Msg + ' (transfer #' + JStr(d, 'tranId') + ')';
+  Result := True;
+end;
+
+function BinFutLeverage(const Sym: string; out Lev, MaxLev: Integer; out Msg: string): Boolean;
+var d: string; c: Integer;
+begin
+  Lev := 0; MaxLev := 0;
+  Result := False;
+  if not BinHasKeys then begin Msg := 'API key Binance belum diisi'; Exit; end;
+  { leverage aktif akun untuk simbol ini }
+  if not Signed('GET', '/fapi/v2/positionRisk', 'symbol=' + Sym, d, c) then
+  begin
+    Msg := ErrMsg(d, c);
+    Exit;
+  end;
+  Lev := StrToIntDef(JStr(d, 'leverage'), 0);
+  { leverage maksimum (bracket pertama) }
+  if Signed('GET', '/fapi/v1/leverageBracket', 'symbol=' + Sym, d, c) then
+    MaxLev := StrToIntDef(JStr(d, 'initialLeverage'), 0);
+  Msg := '';
+  Result := Lev > 0;
+  if not Result then Msg := 'leverage ' + Sym + ' tidak terbaca';
+end;
+
+function BinFutBalance(out Avail: Double; out Msg: string): Boolean;
+var d: string; c, p: Integer;
+begin
+  Avail := 0;
+  Result := False;
+  if not BinHasKeys then begin Msg := 'API key Binance belum diisi'; Exit; end;
+  if not Signed('GET', '/fapi/v2/balance', '', d, c) then
+  begin
+    Msg := ErrMsg(d, c);
+    Exit;
+  end;
+  p := Pos('"asset":"USDT"', d);
+  if p > 0 then Avail := PF(JStr(d, 'availableBalance', p));
+  Msg := '';
+  Result := True;
+end;
+
+function BinFutOrder(const Sym, Side, OType: string; Margin: Double; Lev: Integer;
+  LimitPrice: Double; out Msg: string): Boolean;
+var d, q: string; c: Integer; step, tick, px, qty: Double; hedge: Boolean;
+begin
+  Result := False;
+  if not BinHasKeys then begin Msg := 'API key Binance belum diisi'; Exit; end;
+  if not FutFilters(Sym, step, tick) then
+  begin
+    Msg := 'simbol ' + Sym + ' tidak ada di Binance Futures (atau fapi.binance.com tidak bisa diakses)';
+    Exit;
+  end;
+  { leverage simbol }
+  if not Signed('POST', '/fapi/v1/leverage', Format('symbol=%s&leverage=%d', [Sym, Lev]), d, c) then
+  begin
+    Msg := 'gagal set leverage: ' + ErrMsg(d, c);
+    Exit;
+  end;
+  { harga acuan untuk menghitung jumlah koin }
+  if OType = 'LIMIT' then px := Round(LimitPrice / tick) * tick
+  else
+  begin
+    if not BinHttp('GET', '/fapi/v1/ticker/price', 'symbol=' + Sym, d, c) then
+    begin
+      Msg := 'gagal membaca harga ' + Sym;
+      Exit;
+    end;
+    px := PF(JStr(d, 'price'));
+  end;
+  if px <= 0 then begin Msg := 'harga tidak valid'; Exit; end;
+  qty := Floor(Margin * Lev / px / step + 1E-9) * step;
+  if qty <= 0 then
+  begin
+    Msg := 'jumlah terlalu kecil (naikkan USDT atau leverage)';
+    Exit;
+  end;
+  { mode posisi akun: Hedge butuh positionSide LONG / SHORT }
+  hedge := False;
+  if Signed('GET', '/fapi/v1/positionSide/dual', '', d, c) then hedge := JStr(d, 'dualSidePosition') = 'true';
+  q := Format('symbol=%s&side=%s&type=%s&quantity=%s', [Sym, Side, OType, Fix(qty, Decs(step))]);
+  if OType = 'LIMIT' then q := q + '&timeInForce=GTC&price=' + Fix(px, Decs(tick));
+  if hedge then
+    if Side = 'BUY' then q := q + '&positionSide=LONG' else q := q + '&positionSide=SHORT';
+  if not Signed('POST', '/fapi/v1/order', q, d, c) then
+  begin
+    Msg := ErrMsg(d, c);
+    Exit;
+  end;
+  Msg := Format('FUTURES %s %s %s x%d  qty %s  status %s  (order #%s)',
+    [Side, OType, Sym, Lev, Fix(qty, Decs(step)), JStr(d, 'status'), JStr(d, 'orderId')]);
+  if OType = 'LIMIT' then Msg := Msg + '  @ ' + JStr(d, 'price');
+  Result := True;
+end;
+
+{ ---------------- saldo Spot di latar belakang ---------------- }
+
+constructor TBinBalThread.Create(const Base: string; Done: TBinBalDone);
+begin
+  inherited Create(True);
+  FreeOnTerminate := True;
+  FBase := Base;
+  FDone := Done;
+  Resume;
+end;
+
+procedure TBinBalThread.Execute;
+var m: string;
+begin
+  FOK := BinBalances(FBase, FUSDT, FAmt, FMsg);
+  { belum ada posisi / gagal baca = 0 }
+  if not BinFutPnl(FPnl, FNPos, m) then begin FPnl := 0; FNPos := 0; end;
+  Synchronize(DoDone);
+end;
+
+procedure TBinBalThread.DoDone;
+begin
+  if Assigned(FDone) then FDone(FOK, FUSDT, FAmt, FPnl, FNPos, FMsg);
+end;
+
+function BinFutPnl(out Pnl: Double; out NPos: Integer; out Msg: string): Boolean;
+var d: string; c, p: Integer; amt: Double;
+begin
+  Pnl := 0; NPos := 0;
+  Result := False;
+  if not BinHasKeys then begin Msg := 'API key Binance belum diisi'; Exit; end;
+  if not Signed('GET', '/fapi/v2/positionRisk', '', d, c) then
+  begin
+    Msg := ErrMsg(d, c);
+    Exit;
+  end;
+  { tiap objek posisi: "positionAmt":"x", ... "unRealizedProfit":"y" }
+  p := Pos('"positionAmt":"', d);
+  while p > 0 do
+  begin
+    amt := PF(JStr(d, 'positionAmt', p));
+    if amt <> 0 then
+    begin
+      Pnl := Pnl + PF(JStr(d, 'unRealizedProfit', p));
+      Inc(NPos);
+    end;
+    p := PosEx('"positionAmt":"', d, p + 15);
+  end;
+  Msg := '';
+  Result := True;
+end;
+
+function BinFutPosition(const Sym: string; out Amt, Pnl: Double; out PosSide, Msg: string): Boolean;
+var d: string; c, p: Integer; a: Double;
+begin
+  Amt := 0; Pnl := 0; PosSide := '';
+  Result := False;
+  if not BinHasKeys then begin Msg := 'API key Binance belum diisi'; Exit; end;
+  if not Signed('GET', '/fapi/v2/positionRisk', 'symbol=' + Sym, d, c) then
+  begin
+    Msg := ErrMsg(d, c);
+    Exit;
+  end;
+  { mode Hedge: dua objek (LONG / SHORT); diambil yang jumlahnya bukan 0 }
+  p := Pos('"positionAmt":"', d);
+  while p > 0 do
+  begin
+    a := PF(JStr(d, 'positionAmt', p));
+    if a <> 0 then
+    begin
+      Amt := a;
+      Pnl := PF(JStr(d, 'unRealizedProfit', p));
+      PosSide := JStr(d, 'positionSide', p);
+      Break;
+    end;
+    p := PosEx('"positionAmt":"', d, p + 15);
+  end;
+  Msg := '';
+  Result := True;
+end;
+
+function BinFutClose(const Sym: string; Amt: Double; const PosSide: string; out Msg: string): Boolean;
+var d, q, side: string; c: Integer; step, tick: Double;
+begin
+  Result := False;
+  if not BinHasKeys then begin Msg := 'API key Binance belum diisi'; Exit; end;
+  if Amt = 0 then begin Msg := 'tidak ada posisi'; Exit; end;
+  if not FutFilters(Sym, step, tick) then
+  begin
+    Msg := 'gagal membaca aturan simbol ' + Sym;
+    Exit;
+  end;
+  if Amt > 0 then side := 'SELL' else side := 'BUY';
+  q := Format('symbol=%s&side=%s&type=MARKET&quantity=%s', [Sym, side, Fix(Abs(Amt), Decs(step))]);
+  if (PosSide = 'LONG') or (PosSide = 'SHORT') then q := q + '&positionSide=' + PosSide
+  else q := q + '&reduceOnly=true';
+  if not Signed('POST', '/fapi/v1/order', q, d, c) then
+  begin
+    Msg := ErrMsg(d, c);
+    Exit;
+  end;
+  Msg := Format('FUTURES %s ditutup (%s %s, order #%s)', [Sym, side, Fix(Abs(Amt), Decs(step)), JStr(d, 'orderId')]);
+  Result := True;
+end;
+
+{ ---------------- robot arus pasar di latar belakang ---------------- }
+
+constructor TBinRobThread.Create(Act: Integer; const Sym: string; Margin: Double; Lev: Integer;
+  Amt: Double; const PosSide: string; Done: TBinRobDone);
+begin
+  inherited Create(True);
+  FreeOnTerminate := True;
+  FAct := Act; FSym := Sym; FMargin := Margin; FLev := Lev;
+  FAmt := Amt; FPosSide := PosSide;
+  FDone := Done;
+  Resume;
+end;
+
+procedure TBinRobThread.Execute;
+var m: string;
+begin
+  case FAct of
+    1, -1:
+      if FAct > 0 then FOK := BinFutOrder(FSym, 'BUY', 'MARKET', FMargin, FLev, 0, FMsg)
+      else FOK := BinFutOrder(FSym, 'SELL', 'MARKET', FMargin, FLev, 0, FMsg);
+    2: FOK := BinFutClose(FSym, FAmt, FPosSide, FMsg);
+  end;
+  { setelah buka / tutup, posisi terbaru selalu dibaca ulang }
+  if FAct = 0 then FOK := BinFutPosition(FSym, FAmt, FPnl, FPosSide, FMsg)
+  else BinFutPosition(FSym, FAmt, FPnl, FPosSide, m);
+  Synchronize(DoDone);
+end;
+
+procedure TBinRobThread.DoDone;
+begin
+  if Assigned(FDone) then FDone(FAct, FOK, FSym, FAmt, FPnl, FPosSide, FMsg);
 end;
 
 end.
