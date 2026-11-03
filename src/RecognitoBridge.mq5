@@ -329,6 +329,32 @@ void ReadOrder(bool initial)
       AddLog("Order pengguna diabaikan: kedaluwarsa");
       return;
      }
+   // TUTUP POSISI dari pengguna: tutup semua posisi aplikasi (magic pengguna) di simbol ini
+   if(otype == "CLOSE")
+     {
+      string csym = (symS != "" ? symS : _Symbol);
+      int n = 0, nf = 0;
+      double pl = 0;
+      for(int i = PositionsTotal() - 1; i >= 0; i--)
+        {
+         ulong tk = PositionGetTicket(i);
+         if(tk == 0) continue;
+         if(PositionGetString(POSITION_SYMBOL) != csym) continue;
+         if(PositionGetInteger(POSITION_MAGIC) != USER_MAGIC) continue;
+         double pr = PositionGetDouble(POSITION_PROFIT) + PositionGetDouble(POSITION_SWAP);
+         if(tradeUser.PositionClose(tk)) { n++; pl += pr; }
+         else
+           {
+            nf++;
+            AddLog(StringFormat("GAGAL tutup #%I64u: %s", tk, tradeUser.ResultRetcodeDescription()));
+           }
+        }
+      if(nf > 0)      gOrdAck = id + ";FAIL;" + IntegerToString(nf) + " posisi " + csym + " gagal ditutup";
+      else if(n == 0) gOrdAck = id + ";FAIL;tidak ada posisi aplikasi di " + csym;
+      else            gOrdAck = id + ";OK;" + StringFormat("%d posisi %s DITUTUP pengguna  P/L %.2f", n, csym, pl);
+      AddLog("TUTUP POSISI pengguna " + csym + ": " + IntegerToString(n) + " ditutup");
+      return;
+     }
    // simbol order: dari aplikasi (mis. BTCUSDm) bila ada di MT5, selain itu simbol chart EA
    string sym = _Symbol;
    if(symS != "" && symS != _Symbol)
@@ -385,8 +411,9 @@ void ReadOrder(bool initial)
       if(buy) ok = tradeUser.Buy(lot, sym, 0, sl, tp, (tp > 0 ? "RTF robot" : "RTF pengguna"));
       else    ok = tradeUser.Sell(lot, sym, 0, sl, tp, (tp > 0 ? "RTF robot" : "RTF pengguna"));
       what = StringFormat("%s %.2f %s harga pasar", (buy ? "BUY" : "SELL"), lot, sym);
-      if(tp > 0 || sl > 0)
-         what += StringFormat("  TP %s (+%.2f)  SL %s (-%.2f)", DoubleToString(tp, dg), tpUsd, DoubleToString(sl, dg), slUsd);
+      if(tp > 0) what += StringFormat("  TP %s (+%.2f)", DoubleToString(tp, dg), tpUsd);
+      if(sl > 0) what += StringFormat("  SL %s (-%.2f)", DoubleToString(sl, dg), slUsd);
+      else if(tp > 0) what += "  tanpa SL";
      }
    uint rc = tradeUser.ResultRetcode();
    if(ok && (rc == TRADE_RETCODE_DONE || rc == TRADE_RETCODE_PLACED || rc == TRADE_RETCODE_DONE_PARTIAL))
@@ -493,7 +520,7 @@ void WriteStatus(bool alive)
                       DoubleToString(SymbolInfoDouble(ms, SYMBOL_ASK), mdg) + ";" + IntegerToString(mdg) + "\r\n");
      }
    FileWriteString(h, "ORDACK=" + gOrdAck + "\r\n");
-   FileWriteString(h, "RTFVER=3\r\n");   // 2 = TP / SL dalam USD (robot arus pasar), 3 = + daftar simbol Exness
+   FileWriteString(h, "RTFVER=4\r\n");   // 2 = TP / SL dalam USD (robot arus pasar), 3 = + daftar simbol Exness, 4 = + TUTUP POSISI pengguna
    FileWriteString(h, "AUTO=" + (gAuto ? "1" : "0") + "\r\n");
    FileWriteString(h, "LOTBUY=" + DoubleToString(gLotBuy, 2) + "\r\n");
    FileWriteString(h, "LOTSELL=" + DoubleToString(gLotSell, 2) + "\r\n");

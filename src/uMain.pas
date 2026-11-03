@@ -20,11 +20,15 @@ const
   KIND_MAIN = 1; KIND_LIVE = 2; KIND_MTF = 3; KIND_TICK = 4; KIND_CAL = 5; KIND_PROBE = 6; KIND_BOOK = 7;
   KIND_FLOW = 8; KIND_IDX = 9;
 
-  { robot arus pasar: ikuti transaksi besar; untung +5 USD tutup, rugi -15 USD stop }
+  { ROBOT MULUNG (robot arus pasar): ikuti arus modal kuat (STRONG BUY = beli, STRONG SELL = jual); untung +5 USD tutup, rugi -15 USD stop }
   ROB_STRONG = 7;      { skor arus >= 7 (dari 10) = STRONG }
+  ROB_SIG = 6;         { skor SINYAL utama >= +6 = robot BELI, <= -6 = robot JUAL }
   ROB_LOT = 0.01;      { lot MT5 }
   ROB_TP = 5;
-  ROB_SL = 15;
+  ROB_TP_BIG = 1;      { MT5: ikut eksekusi besar, untung +1 USD cukup }
+  ROB_BIG_FLOW = 3;    { eksekusi besar: arah pasar jelas bila arus transaksi besar searah tren >= 3/10 }
+  ROB_CONFIRM = 15;    { detik: SINYAL kuat harus bertahan searah selama ini (dan arus tidak melawan) = konfirmasi fix }
+  ROB_SL = 15;         { hanya Binance; MT5 tanpa stop loss: tutup di +5 USD atau oleh pengguna (TUTUP POSISI) }
 
   PageNames: array[0..4] of string = ('BINANCE', 'MT5', 'INDODAX', 'EXNESS', 'TRADE WILL');
 
@@ -207,7 +211,7 @@ type
     { robot arus pasar + bar sinyal (merah 10 / hijau 10) di bawah grafik }
     pnlFlow: TPanel;
     pbFlow: TPaintBox;
-    btnRobStop, btnRobGo: TFlatBtn;
+    btnRobStop, btnRobGo, btnRobClose: TFlatBtn;
     FFlow: TFlow;
     FBusyFlow: Boolean;
     FFlowAlarm: Integer;
@@ -228,6 +232,11 @@ type
     FRobMT5At: TDateTime;
     FRobMT5Has: Boolean;
     FRobMT5PL: Double;
+    FRobMT5Any: Boolean;  { ada posisi dari aplikasi di MT5 (simbol mana pun) }
+    FRobSigDir: Integer;     { arah SINYAL kuat yang sedang dikonfirmasi (0 = tidak ada) }
+    FRobSigSince: TDateTime; { sejak kapan arah itu bertahan }
+    FRobMT5TP: Integer;   { TP (USD) order robot MT5 terakhir: +5 sinyal / arus, +1 ikut eksekusi besar }
+    FRobBinUser: Boolean;   { penutupan Binance berikutnya atas perintah pengguna (TUTUP POSISI) }
     FRobBigID: Int64;   { id eksekusi besar terakhir yang sudah dilihat robot; -1 = belum }
 
     procedure BuildUI;
@@ -253,6 +262,7 @@ type
     procedure OnFlowPaint(Sender: TObject);
     procedure OnRobStop(Sender: TObject);
     procedure OnRobGo(Sender: TObject);
+    procedure OnRobClose(Sender: TObject);
     procedure RobotStep;
     procedure RobotBinCheck;
     procedure OnBinRobDone(Act: Integer; OK: Boolean; const Sym: string; Amt, Pnl: Double;
@@ -750,13 +760,16 @@ begin
   pbFlow.Parent := pnlFlow;
   pbFlow.Align := alClient;
   pbFlow.OnPaint := OnFlowPaint;
-  btnRobStop := MakeBtn(pnlFlow, 'STOP', 6, 6, 70, 60, OnRobStop);
+  btnRobStop := MakeBtn(pnlFlow, 'STOP', 6, 6, 70, 36, OnRobStop);
   btnRobStop.Bg := clrRedDim; btnRobStop.Fg := clWhite; btnRobStop.Bold := True;
   btnRobStop.BgDown := clrRed; btnRobStop.FgDown := clWhite;
   btnRobStop.Down := True;
-  btnRobGo := MakeBtn(pnlFlow, 'LANJUT', 82, 6, 76, 60, OnRobGo);
+  btnRobGo := MakeBtn(pnlFlow, 'LANJUT', 82, 6, 76, 36, OnRobGo);
   btnRobGo.Bg := clrGreenDim; btnRobGo.Fg := clWhite; btnRobGo.Bold := True;
   btnRobGo.BgDown := clrGreen; btnRobGo.FgDown := clWhite;
+  { pengguna bisa menutup posisi robot kapan saja (tidak menunggu +5 / -15) }
+  btnRobClose := MakeBtn(pnlFlow, 'TUTUP POSISI', 6, 46, 152, 22, OnRobClose);
+  btnRobClose.Bold := True;
 
   Chart := TChartView.Create(Self);
   Chart.Parent := pnlCenter;
@@ -1692,8 +1705,9 @@ begin
     SetLength(lines, 0);
     FMT5Ver := 0;
     if FMT5Alive then FMT5Ver := StrToIntDef(sl.Values['RTFVER'], 0);
-    { robot arus pasar MT5: sudah ada posisi dari aplikasi di simbol ini = tidak membuka lagi }
-    FRobMT5Has := False; FRobMT5PL := 0;
+    { robot arus pasar MT5: sudah ada posisi dari aplikasi = tidak membuka lagi (FRobMT5Has = simbol ini,
+      FRobMT5Any = simbol mana pun: robot hanya 1 posisi sampai selesai) }
+    FRobMT5Has := False; FRobMT5Any := False; FRobMT5PL := 0;
     f := TStringList.Create;
     try
       if FMT5Alive then
@@ -1703,6 +1717,7 @@ begin
             { ACPOS=tiket;jenis;lot;simbol;open;kini;sl;tp;P/L;asal }
             f.Text := StringReplace(Copy(sl[i], 7, MaxInt), ';', #13#10, [rfReplaceAll]);
             if f.Count < 9 then Continue;
+            if (f.Count >= 10) and (f[9] = 'APLIKASI') then FRobMT5Any := True;
             if (f.Count >= 10) and (f[9] = 'APLIKASI') and (FMT5Sym <> '') and SameText(f[3], FMT5Sym) then
             begin
               FRobMT5Has := True;
@@ -1833,11 +1848,11 @@ begin
       if (FRobMT5ID <> '') and (Copy(v, 1, Length(FRobMT5ID) + 1) = FRobMT5ID + ';') then
       begin
         Delete(v, 1, Length(FRobMT5ID) + 1);
-        if Copy(v, 1, 3) = 'OK;' then FRobMsg := 'MT5 DIBUKA: ' + Copy(v, 4, MaxInt)
+        if Copy(v, 1, 3) = 'OK;' then FRobMsg := 'MT5: ' + Copy(v, 4, MaxInt)
         else
         begin
           FRobMsg := 'MT5 GAGAL: ' + Copy(v, 6, MaxInt);
-          AddLog('ROBOT MT5 ' + FRobMsg, clrRed);
+          AddLog('ROBOT MULUNG MT5 ' + FRobMsg, clrRed);
         end;
         FRobMT5ID := '';
       end;
@@ -1849,7 +1864,7 @@ begin
     if (FRobMT5ID <> '') and (Now - FRobMT5At > 25 / 86400) then
     begin
       FRobMsg := 'Tidak ada jawaban dari EA MT5 untuk order robot';
-      AddLog('ROBOT MT5: ' + FRobMsg, RGB(255, 145, 0));
+      AddLog('ROBOT MULUNG MT5: ' + FRobMsg, RGB(255, 145, 0));
       FRobMT5ID := '';
     end;
     if Assigned(pbFlow) then pbFlow.Invalidate;
@@ -3535,6 +3550,7 @@ begin
   FFlow.OK := False;
   FFlowAlarm := 0;
   FRobBigID := -1;   { koin baru: eksekusi lama tidak diikuti }
+  FSig.Entry := 0;   { sinyal koin lama tidak dipakai robot sampai sinyal koin baru dihitung }
   pbFlow.Invalidate;
   LoadMain;
   LoadMTF;
@@ -3697,69 +3713,116 @@ begin
   Result := n;
 end;
 
-{ robot hanya order di halaman yang aktif: BINANCE = Binance Futures, MT5 = MT5 (tidak keduanya) }
+{ robot hanya order di halaman yang aktif: BINANCE = Binance Futures, MT5 / EXNESS = MT5 (tidak keduanya) }
 procedure TMainForm.RobotStep;
-var dir, lev: Integer; margin: Double; sym, id: string;
+var dir, bdir, fdir, sdir, mdir, lev, tp: Integer; margin: Double; sym, id, why: string;
 begin
-  if not FRobOn or not FFlow.OK then Exit;
-  { satu-satunya pemicu: eksekusi besar BARU di pasar (1% transaksi terbesar), robot ikut arahnya.
-    Tidak memakai sinyal / indikator lain. Eksekusi lama (sebelum LANJUT / ganti koin) tidak diikuti. }
-  dir := 0;
-  if FRobBigID < 0 then FRobBigID := FFlow.LastBigID
-  else if FFlow.LastBigID > FRobBigID then
+  if not FRobOn then Exit;
+  { eksekusi besar BARU (1% transaksi terbesar, maks. 30 detik lalu): tiap eksekusi hanya dilihat sekali,
+    yang lewat saat robot punya posisi / jeda tidak diikuti (tunggu eksekusi besar berikutnya).
+    Eksekusi sebelum LANJUT / ganti koin tidak diikuti. }
+  bdir := 0;
+  if FFlow.OK then
+    if FRobBigID < 0 then FRobBigID := FFlow.LastBigID
+    else if FFlow.LastBigID > FRobBigID then
+    begin
+      FRobBigID := FFlow.LastBigID;
+      if FFlow.LastBigAge <= 30 then bdir := FFlow.LastBigSide;
+    end;
+  { pemicu 1 - ARUS MODAL KUAT: skor arus >= 7 dan eksekusi besar baru searah }
+  fdir := 0;
+  if (bdir <> 0) and (Abs(FFlow.Score) >= ROB_STRONG) and (bdir = Sign(FFlow.Score)) then fdir := bdir;
+  { pemicu 2 - SINYAL utama grafik: skor >= +6 BELI, skor <= -6 JUAL, tapi hanya setelah KONFIRMASI FIX:
+    arah itu bertahan ROB_CONFIRM detik tanpa putus dan arus transaksi besar tidak berlawanan }
+  sdir := 0;
+  if FSig.Entry > 0 then
+    if FSig.Score >= ROB_SIG then sdir := 1
+    else if FSig.Score <= -ROB_SIG then sdir := -1;
+  if sdir <> FRobSigDir then begin FRobSigDir := sdir; FRobSigSince := Now; end;
+  if (sdir <> 0) and ((Now - FRobSigSince < ROB_CONFIRM / 86400) or
+    (FFlow.OK and (Sign(FFlow.Score) = -sdir))) then sdir := 0;
+  { keduanya kuat tapi berlawanan arah = tidak order }
+  if (fdir <> 0) and (sdir <> 0) and (fdir <> sdir) then Exit;
+  { hanya 1 posisi robot (Binance atau MT5, simbol mana pun); baru buka lagi setelah yang lama selesai }
+  if (FRobBinSym <> '') or FRobBinBusy or FRobMT5Any or (FRobMT5ID <> '') then Exit;
+  tp := ROB_TP;
+  if fdir <> 0 then dir := fdir else dir := sdir;
+  if fdir <> 0 then why := Format('arus modal kuat %s %d/10', [Sx(dir > 0, 'BELI', 'JUAL'), Abs(FFlow.Score)])
+  else if sdir <> 0 then why := Format('sinyal %s skor %s', [Sx(dir > 0, 'BUY', 'SELL'), SgnI(FSig.Score)])
+  else if (bdir <> 0) and MT5Page then
   begin
-    FRobBigID := FFlow.LastBigID;
-    if FFlow.LastBigAge <= 30 then dir := FFlow.LastBigSide;
+    { pemicu 3 (MT5 / EXNESS) - eksekusi besar = saatnya masuk, ambil untung kecil +1 USD.
+      Arah order SELALU ikut arah pasar, bukan arah satu transaksi itu: BELI besar saat emas sedang turun
+      = robot JUAL (beli itu kalah oleh pasar), JUAL besar saat emas naik = robot BELI.
+      Arah pasar jelas bila tren, arus transaksi besar (>= 3/10) searah, candle berjalan & sinyal tidak melawan.
+      Arah pasar tidak jelas = tidak order. }
+    mdir := FSI.Trend;
+    why := '';
+    if mdir = 0 then why := 'tren belum jelas'
+    else if (Sign(FFlow.Score) <> mdir) or (Abs(FFlow.Score) < ROB_BIG_FLOW) then
+      why := Format('tren %s tapi arus transaksi besar %s %d/10', [Sx(mdir > 0, 'naik', 'turun'),
+        Sx(FFlow.Score >= 0, 'BELI', 'JUAL'), Abs(FFlow.Score)])
+    else if (FSig.Entry <= 0) or (FSig.Score * mdir < 0) then
+      why := Format('tren %s tapi sinyal %s', [Sx(mdir > 0, 'naik', 'turun'), SgnI(FSig.Score)])
+    else if (Length(FCandles) > 0) and (Sign(FCandles[High(FCandles)].C - FCandles[High(FCandles)].O) = -mdir) then
+      why := Format('tren %s tapi candle berjalan %s', [Sx(mdir > 0, 'naik', 'turun'), Sx(mdir > 0, 'turun', 'naik')]);
+    if why <> '' then
+    begin
+      FRobMsg := Format('Eksekusi %s besar diabaikan: %s', [Sx(bdir > 0, 'BELI', 'JUAL'), why]);
+      AddLog('ROBOT MULUNG: ' + FRobMsg, clrMuted);
+      Exit;
+    end;
+    dir := mdir;
+    tp := ROB_TP_BIG;
+    why := Format('eksekusi %s besar %s USDT, pasar %s (tren, arus %d/10, candle) = ikut pasar',
+      [Sx(bdir > 0, 'BELI', 'JUAL'), FormatFloat('#,##0', FFlow.LastBigQ), Sx(mdir > 0, 'NAIK', 'TURUN'), Abs(FFlow.Score)]);
   end;
   if (dir = 0) or (Now < FRobNext) then Exit;
-  case FMode of
-    0:
+  if FMode = 0 then
+    begin
+      if (FRobBinSym <> '') or FRobBinBusy then Exit;   { satu posisi robot sekaligus }
+      if not BinHasKeys then begin FRobMsg := 'API key Binance belum diisi (OPEN BINANCE > KEY)'; Exit; end;
+      if FIsGold then sym := 'XAUUSDT' else sym := FSym;
+      { buka hanya bila cek terakhir (maks. 10 detik lalu) menunjukkan koin ini belum punya posisi }
+      if (FRobBinCurSym <> sym) or (FRobBinCurAmt <> 0) or (Now - FRobBinCurAt > 10 / 86400) then Exit;
+      margin := PF(StringReplace(edBinAmt.Text, ',', '.', []));
+      if FBinMaxLev > 0 then lev := Max(1, Min(FBinMaxLev, StrToIntDef(edBinLev.Text, 1)))
+      else lev := Max(1, Min(125, StrToIntDef(edBinLev.Text, 1)));
+      if margin * lev < 5 then
       begin
-        if (FRobBinSym <> '') or FRobBinBusy then Exit;   { satu posisi robot sekaligus }
-        if not BinHasKeys then begin FRobMsg := 'API key Binance belum diisi (OPEN BINANCE > KEY)'; Exit; end;
-        if FIsGold then sym := 'XAUUSDT' else sym := FSym;
-        { buka hanya bila cek terakhir (maks. 10 detik lalu) menunjukkan koin ini belum punya posisi }
-        if (FRobBinCurSym <> sym) or (FRobBinCurAmt <> 0) or (Now - FRobBinCurAt > 10 / 86400) then Exit;
-        margin := PF(StringReplace(edBinAmt.Text, ',', '.', []));
-        if FBinMaxLev > 0 then lev := Max(1, Min(FBinMaxLev, StrToIntDef(edBinLev.Text, 1)))
-        else lev := Max(1, Min(125, StrToIntDef(edBinLev.Text, 1)));
-        if margin * lev < 5 then
-        begin
-          FRobMsg := 'Margin x leverage di panel OPEN BINANCE minimal 5 USDT';
-          Exit;
-        end;
-        FRobBinBusy := True;
-        FRobNext := Now + 60 / 86400;
-        FRobMsg := Format('Membuka %s %s di Binance Futures ...', [Sx(dir > 0, 'BUY / LONG', 'SELL / SHORT'), sym]);
-        AddLog(Format('ROBOT ARUS PASAR: %s %s Futures margin %s USDT x%d (ikut eksekusi %s besar %s USDT)',
-          [Sx(dir > 0, 'BUY', 'SELL'), sym, FormatFloat('0.##', margin), lev, Sx(dir > 0, 'BELI', 'JUAL'),
-           FormatFloat('#,##0', FFlow.LastBigQ)]), DirCol(dir));
-        TBinRobThread.Create(dir, sym, margin, lev, 0, '', OnBinRobDone);
+        FRobMsg := 'Margin x leverage di panel OPEN BINANCE minimal 5 USDT';
+        Exit;
       end;
-    1:
+      FRobBinBusy := True;
+      FRobNext := Now + 60 / 86400;
+      FRobMsg := Format('Membuka %s %s di Binance Futures ...', [Sx(dir > 0, 'BUY / LONG', 'SELL / SHORT'), sym]);
+      AddLog(Format('ROBOT MULUNG: %s %s Futures margin %s USDT x%d (%s)',
+        [Sx(dir > 0, 'BUY', 'SELL'), sym, FormatFloat('0.##', margin), lev, why]), DirCol(dir));
+      TBinRobThread.Create(dir, sym, margin, lev, 0, '', OnBinRobDone);
+    end
+  else if MT5Page then
+    begin
+      if not FMT5Alive then begin FRobMsg := 'MT5 belum terhubung'; Exit; end;
+      if FMT5Ver < 2 then
       begin
-        if not FMT5Alive then begin FRobMsg := 'MT5 belum terhubung'; Exit; end;
-        if FMT5Ver < 2 then
-        begin
-          FRobMsg := 'EA MT5 versi lama: tab MT5 > Pasang EA ke MT5, lalu Compile (F7) & pasang ulang';
-          Exit;
-        end;
-        if FMT5Sym = '' then begin FRobMsg := CurBase + ' tidak ada di Market Watch MT5'; Exit; end;
-        if FRobMT5Has or (FRobMT5ID <> '') then Exit;   { satu posisi robot sekaligus }
-        if not MT5WriteOrder(FMT5Sym, Sx(dir > 0, 'BUY', 'SELL'), 'MARKET', ROB_LOT, 0, id, ROB_TP, ROB_SL) then
-        begin
-          FRobMsg := 'Gagal menulis order ke folder MT5';
-          Exit;
-        end;
-        FRobMT5ID := id;
-        FRobMT5At := Now;
-        FRobNext := Now + 60 / 86400;
-        FRobMsg := Format('Mengirim %s %.2f %s ke MT5 ...', [Sx(dir > 0, 'BUY', 'SELL'), ROB_LOT, FMT5Sym]);
-        AddLog(Format('ROBOT ARUS PASAR: %s %.2f %s  TP +%d / SL -%d USD (ikut eksekusi %s besar %s USDT)',
-          [Sx(dir > 0, 'BUY', 'SELL'), ROB_LOT, FMT5Sym, ROB_TP, ROB_SL, Sx(dir > 0, 'BELI', 'JUAL'),
-           FormatFloat('#,##0', FFlow.LastBigQ)]), DirCol(dir));
+        FRobMsg := 'EA MT5 versi lama: tab MT5 > Pasang EA ke MT5, lalu Compile (F7) & pasang ulang';
+        Exit;
       end;
-  end;
+      if FMT5Sym = '' then begin FRobMsg := CurBase + ' tidak ada di Market Watch MT5'; Exit; end;
+      if FRobMT5Has or (FRobMT5ID <> '') then Exit;   { satu posisi robot sekaligus }
+      if not MT5WriteOrder(FMT5Sym, Sx(dir > 0, 'BUY', 'SELL'), 'MARKET', ROB_LOT, 0, id, tp, 0) then
+      begin
+        FRobMsg := 'Gagal menulis order ke folder MT5';
+        Exit;
+      end;
+      FRobMT5ID := id;
+      FRobMT5At := Now;
+      FRobNext := Now + 60 / 86400;
+      FRobMsg := Format('Mengirim %s %.2f %s ke MT5 ...', [Sx(dir > 0, 'BUY', 'SELL'), ROB_LOT, FMT5Sym]);
+      AddLog(Format('ROBOT MULUNG: %s %.2f %s  TP +%d USD, tanpa SL (%s)',
+        [Sx(dir > 0, 'BUY', 'SELL'), ROB_LOT, FMT5Sym, tp, why]), DirCol(dir));
+      FRobMT5TP := tp;
+    end;
 end;
 
 { tiap 3 detik: posisi milik robot di Binance selalu dijaga (untung +5 tutup, rugi -15 stop) walau robot STOP
@@ -3791,18 +3854,20 @@ begin
         FRobBinAmt := Amt; FRobBinPnl := Pnl; FRobBinSide := PosSide;
         FRobBinOpenAt := Now;
         FRobMsg := 'DIBUKA: ' + Msg;
-        Alarm('ROBOT BINANCE: ' + Msg + Format('  (tutup di +%d / stop di -%d USDT)', [ROB_TP, ROB_SL]), Act);
+        Alarm('ROBOT MULUNG BINANCE: ' + Msg + Format('  (tutup di +%d / stop di -%d USDT)', [ROB_TP, ROB_SL]), Act);
       end
       else
       begin
         FRobMsg := 'GAGAL buka: ' + Msg;
-        AddLog('ROBOT BINANCE GAGAL buka ' + Sym + ': ' + Msg, clrRed);
+        AddLog('ROBOT MULUNG BINANCE GAGAL buka ' + Sym + ': ' + Msg, clrRed);
       end;
     2:
       if OK then
       begin
-        Alarm(Format('ROBOT BINANCE: %s  P/L %s USDT (%s)', [Msg, FormatFloat('+0.00;-0.00', FRobBinPnl),
-          Sx(FRobBinPnl >= 0, 'untung - target tercapai', 'rugi - stop loss')]), Sign(FRobBinPnl));
+        Alarm(Format('ROBOT MULUNG BINANCE: %s  P/L %s USDT (%s)', [Msg, FormatFloat('+0.00;-0.00', FRobBinPnl),
+          Sx(FRobBinUser, 'ditutup pengguna', Sx(FRobBinPnl >= 0, 'untung - target tercapai', 'rugi - stop loss'))]),
+          Sign(FRobBinPnl));
+        FRobBinUser := False;
         FRobMsg := Format('Ditutup %s  P/L %s USDT', [Sym, FormatFloat('+0.00;-0.00', FRobBinPnl)]);
         if Amt = 0 then FRobBinSym := '';
         FRobNext := Now + 60 / 86400;
@@ -3811,7 +3876,7 @@ begin
       else
       begin
         FRobMsg := 'GAGAL tutup (dicoba lagi): ' + Msg;
-        AddLog('ROBOT BINANCE GAGAL tutup ' + Sym + ': ' + Msg, clrRed);
+        AddLog('ROBOT MULUNG BINANCE GAGAL tutup ' + Sym + ': ' + Msg, clrRed);
       end;
     0:
       if not OK then FRobMsg := 'Binance: ' + Msg
@@ -3825,7 +3890,7 @@ begin
             { baru dibuka bisa belum terbaca; setelah 15 detik tanpa posisi = sudah ditutup di luar robot }
             if Now - FRobBinOpenAt > 15 / 86400 then
             begin
-              AddLog('ROBOT BINANCE: posisi ' + Sym + ' sudah tidak ada (ditutup di luar robot).', clrMuted);
+              AddLog('ROBOT MULUNG BINANCE: posisi ' + Sym + ' sudah tidak ada (ditutup di luar robot).', clrMuted);
               FRobBinSym := '';
               FRobMsg := '';
             end;
@@ -3853,7 +3918,7 @@ begin
   if not FRobOn then Exit;
   FRobOn := False;
   FRobMsg := Sx(FRobBinSym <> '', 'Posisi Binance robot tetap dijaga TP +5 / SL -15', '');
-  AddLog('ROBOT ARUS PASAR: STOP - tidak membuka posisi baru.', clrYellow);
+  AddLog('ROBOT MULUNG: STOP - tidak membuka posisi baru.', clrYellow);
   pbFlow.Invalidate;
 end;
 
@@ -3863,20 +3928,27 @@ begin
   btnRobGo.Down := FRobOn;
   btnRobStop.Down := not FRobOn;
   if FRobOn then Exit;
-  case FMode of
-    0: venue := Format('BINANCE FUTURES: margin %s USDT x%s (isian panel OPEN BINANCE)', [edBinAmt.Text, edBinLev.Text]);
-    1: venue := Format('MT5: %.2f lot, TP & SL dipasang di broker', [ROB_LOT]);
+  if FMode = 0 then
+    venue := Format('BINANCE FUTURES: margin %s USDT x%s (isian panel OPEN BINANCE)', [edBinAmt.Text, edBinLev.Text])
+  else if MT5Page then
+    venue := Format('%s (MT5): %.2f lot, TP dipasang di broker', [PageNames[FMode], ROB_LOT])
   else
-    begin
-      MessageDlg('Robot hanya berjalan di halaman BINANCE atau MT5.', mtInformation, [mbOK], 0);
-      Exit;
-    end;
+  begin
+    MessageDlg('Robot hanya berjalan di halaman BINANCE, MT5, atau EXNESS (grafik MT5).', mtInformation, [mbOK], 0);
+    Exit;
   end;
-  if MessageDlg('Jalankan ROBOT ARUS PASAR?' + #13#10#13#10 +
-    'Robot mengirim order NYATA otomatis, HANYA mengikuti eksekusi besar di pasar' + #13#10 +
-    '(1% transaksi terbesar), tidak memakai sinyal / indikator lain:' + #13#10 +
-    '  eksekusi BELI besar = robot BELI, eksekusi JUAL besar = robot JUAL' + #13#10 +
-    Format('  untung +%d USD = tutup, rugi -%d USD = stop', [ROB_TP, ROB_SL]) + #13#10 +
+  if MessageDlg('Jalankan ROBOT MULUNG?' + #13#10#13#10 +
+    'Robot mengirim order NYATA otomatis bila salah satu kuat:' + #13#10 +
+    Format('  ARUS modal kuat >= %d/10 atau SINYAL skor >= %d', [ROB_STRONG, ROB_SIG]) + #13#10 +
+    '  arus / sinyal BELI kuat = robot BELI, JUAL kuat = robot JUAL' + #13#10 +
+    '  (arus & sinyal kuat tapi berlawanan = tidak order)' + #13#10 +
+    Format('  sinyal harus terkonfirmasi: bertahan %d detik & arus tidak melawan', [ROB_CONFIRM]) + #13#10 +
+    '  hanya 1 posisi (Binance / MT5, simbol mana pun); baru buka lagi setelah selesai' + #13#10 +
+    Sx(MT5Page, Format('  eksekusi besar = robot masuk %.2f lot SEARAH PASAR, untung +%d USD = tutup', [ROB_LOT, ROB_TP_BIG]) + #13#10 +
+      '  (pasar turun = JUAL walau yang besar beli; pasar naik = BELI; pasar tidak jelas = tidak order)' + #13#10 +
+      Format('  arus / sinyal kuat: untung +%d USD = tutup', [ROB_TP]) + #13#10 +
+      '  TANPA stop loss: rugi tidak ditutup otomatis, tutup sendiri dengan TUTUP POSISI',
+      Format('  untung +%d USD = tutup, rugi -%d USD = stop', [ROB_TP, ROB_SL])) + #13#10 +
     '  satu posisi sekaligus, hanya di halaman yang aktif:' + #13#10 + '  ' + venue + #13#10#13#10 +
     'Trading berisiko. Lanjut?', mtWarning, [mbYes, mbNo], 0) <> mrYes then Exit;
   FRobOn := True;
@@ -3885,7 +3957,55 @@ begin
   FRobMsg := '';
   btnRobGo.Down := True;
   btnRobStop.Down := False;
-  AddLog('ROBOT ARUS PASAR: LANJUT - ' + venue, clrGreen);
+  AddLog('ROBOT MULUNG: LANJUT - ' + venue, clrGreen);
+  pbFlow.Invalidate;
+end;
+
+{ TUTUP POSISI: pengguna menutup posisi robot sekarang, tanpa menunggu untung +5 / rugi -15.
+  Binance = posisi milik robot; MT5 / EXNESS = posisi dari aplikasi di simbol grafik. Robot tetap JALAN / STOP seperti semula. }
+procedure TMainForm.OnRobClose(Sender: TObject);
+var id: string;
+begin
+  if FRobBinSym <> '' then
+  begin
+    if FRobBinBusy then
+    begin
+      MessageDlg('Robot Binance sedang memproses - coba lagi beberapa detik.', mtInformation, [mbOK], 0);
+      Exit;
+    end;
+    if MessageDlg(Format('Tutup posisi robot %s %s di Binance Futures sekarang?' + #13#10 + 'P/L saat ini: %s USDT',
+      [Sx(FRobBinAmt > 0, 'BUY', 'SELL'), FRobBinSym, FormatFloat('+0.00;-0.00', FRobBinPnl)]),
+      mtConfirmation, [mbYes, mbNo], 0) <> mrYes then Exit;
+    FRobBinBusy := True;
+    FRobBinUser := True;
+    FRobMsg := 'Menutup ' + FRobBinSym + ' (perintah pengguna) ...';
+    AddLog('TUTUP POSISI pengguna: Binance ' + FRobBinSym, clrYellow);
+    TBinRobThread.Create(2, FRobBinSym, 0, 0, FRobBinAmt, FRobBinSide, OnBinRobDone);
+  end
+  else if MT5Page and FRobMT5Has then
+  begin
+    if FMT5Ver < 4 then
+    begin
+      MessageDlg('EA MT5 versi lama belum bisa menutup posisi dari aplikasi.' + #13#10 +
+        'Tab MT5 > Pasang EA ke MT5, lalu Compile (F7) & pasang ulang EA di chart.', mtInformation, [mbOK], 0);
+      Exit;
+    end;
+    if MessageDlg(Format('Tutup SEMUA posisi dari aplikasi di %s (MT5) sekarang?' + #13#10 + 'P/L saat ini: %s',
+      [FMT5Sym, FormatFloat('+0.00;-0.00', FRobMT5PL)]), mtConfirmation, [mbYes, mbNo], 0) <> mrYes then Exit;
+    if not MT5WriteOrder(FMT5Sym, '', 'CLOSE', 0, 0, id) then
+    begin
+      MessageDlg('Gagal menulis perintah ke folder MT5.', mtError, [mbOK], 0);
+      Exit;
+    end;
+    FRobMT5ID := id;   { jawaban EA tampil di bar robot }
+    FRobMT5At := Now;
+    FRobNext := Now + 60 / 86400;
+    FRobMsg := 'Menutup posisi ' + FMT5Sym + ' (perintah pengguna) ...';
+    AddLog('TUTUP POSISI pengguna: MT5 ' + FMT5Sym, clrYellow);
+  end
+  else
+    MessageDlg('Tidak ada posisi robot yang terbuka' +
+      Sx(MT5Page, ' di ' + FMT5Sym + ' (MT5).', ' di Binance.'), mtInformation, [mbOK], 0);
   pbFlow.Invalidate;
 end;
 
@@ -3950,17 +4070,14 @@ begin
   begin
     { hanya halaman navbar yang diklik yang jalan }
     cv.Font.Color := clrGreen;
-    case FMode of
-      0: t := 'BINANCE: JALAN   |   MT5: STOP';
-      1: t := 'MT5: JALAN (' + FormatFloat('0.00', ROB_LOT) + ' lot)   |   BINANCE: STOP';
-    else
-      begin t := PageNames[FMode] + ': BINANCE & MT5 STOP'; cv.Font.Color := clrYellow; end;
-    end;
+    if FMode = 0 then t := 'ROBOT MULUNG: BINANCE JALAN'
+    else if MT5Page then t := 'ROBOT MULUNG: ' + PageNames[FMode] + ' MT5 JALAN ' + FormatFloat('0.00', ROB_LOT) + ' lot'
+    else begin t := PageNames[FMode] + ': BINANCE & MT5 STOP'; cv.Font.Color := clrYellow; end;
   end
   else
   begin
     cv.Font.Color := RGB(255, 145, 0);
-    t := 'ROBOT: STOP';
+    t := 'ROBOT MULUNG: STOP';
   end;
   cv.TextOut(x0, 5, t);
   cv.Font.Size := 8; cv.Font.Style := []; cv.Font.Color := clrMuted;
@@ -3970,18 +4087,25 @@ begin
       FormatFloat('+0.00;-0.00', FRobBinPnl), ROB_TP, ROB_SL]);
     cv.Font.Color := DirCol(Sign(FRobBinPnl));
   end
-  else if (FMode = 1) and FRobMT5Has then
+  else if MT5Page and FRobMT5Has then
   begin
-    t2 := Format('Posisi MT5 %s  P/L %s  (TP +%d / SL -%d di broker)', [FMT5Sym, FormatFloat('+0.00;-0.00', FRobMT5PL), ROB_TP, ROB_SL]);
+    t2 := Format('Posisi MT5 %s  P/L %s  (TP +%d, tanpa SL)', [FMT5Sym, FormatFloat('+0.00;-0.00', FRobMT5PL),
+      Max(1, FRobMT5TP)]);
     cv.Font.Color := DirCol(Sign(FRobMT5PL));
   end
+  else if FRobOn and (FRobSigDir <> 0) and (Now - FRobSigSince < ROB_CONFIRM / 86400) then
+    t2 := Format('Konfirmasi SINYAL %s skor %s ... %d/%d dtk', [Sx(FRobSigDir > 0, 'BUY', 'SELL'), SgnI(FSig.Score),
+      Trunc((Now - FRobSigSince) * 86400), ROB_CONFIRM])
   else if FRobMsg <> '' then t2 := FRobMsg
-  else t2 := Sx(FRobOn, 'Menunggu ARUS STRONG ...', 'Tekan LANJUT untuk menjalankan robot');
+  else t2 := Sx(FRobOn, Sx(MT5Page, 'Menunggu eksekusi besar / SINYAL skor 6 ...', 'Menunggu ARUS STRONG / SINYAL skor 6 ...'),
+    'Tekan LANJUT untuk menjalankan robot');
   cv.TextRect(Rect(x0, 25, x0 + 300, 40), x0, 25, t2);
   { posisi Binance / MT5 sudah di baris atas; baris bawah = aturan robot }
   cv.Font.Color := clrMuted;
   cv.TextRect(Rect(x0, 45, x0 + 300, 60), x0, 45,
-    Format('Ikut eksekusi besar: beli=BELI, jual=JUAL | +%d / -%d', [ROB_TP, ROB_SL]));
+    Sx(MT5Page, Format('Sinyal >= %d / arus >= %d: +%d | eksekusi besar: +%d | tanpa SL',
+      [ROB_SIG, ROB_STRONG, ROB_TP, ROB_TP_BIG]),
+      Format('Arus >= %d atau sinyal >= %d: BELI / JUAL | +%d / -%d', [ROB_STRONG, ROB_SIG, ROB_TP, ROB_SL])));
 
   { dua baris bar: ARUS (robot) di atas, SINYAL (sinyal utama BUY / SELL lemah & kuat) di bawah }
   bx := x0 + 360;
@@ -5229,6 +5353,7 @@ begin
   if (FMode = 2) and (Now - FIdxAt > 30 / 86400) then LoadIdxTick;   { koin Indodax tiap 30 detik }
   if (FMode = 3) and (Now - FExnAt > 30 / 86400) then ReadExnSymbols;   { simbol Exness dari EA }
   RobotBinCheck;
+  RobotStep;   { pemicu SINYAL skor 7 juga jalan di koin tanpa data transaksi Binance }
   if (SecondOf(Now) = 30) then
   begin
     LoadTickers;
@@ -5601,13 +5726,12 @@ begin
   if FRobOn then
   begin
     FRobMsg := '';
-    case FMode of
-      0: Alarm('ROBOT pindah ke BINANCE: Binance JALAN, MT5 STOP.', 2);
-      1: Alarm('ROBOT pindah ke MT5: MT5 JALAN, Binance STOP' +
-           Sx(FRobBinSym <> '', ' (posisi Binance robot tetap dijaga +5 / -15 sampai tertutup).', '.'), 2);
+    if FMode = 0 then Alarm('ROBOT MULUNG pindah ke BINANCE: Binance JALAN, MT5 STOP.', 2)
+    else if MT5Page then
+      Alarm(Format('ROBOT MULUNG pindah ke %s: MT5 JALAN, Binance STOP', [PageNames[FMode]]) +
+        Sx(FRobBinSym <> '', ' (posisi Binance robot tetap dijaga +5 / -15 sampai tertutup).', '.'), 2)
     else
-      Alarm(Format('ROBOT di halaman %s: Binance & MT5 STOP (tidak order).', [PageNames[FMode]]), 2);
-    end;
+      Alarm(Format('ROBOT MULUNG di halaman %s: Binance & MT5 STOP (tidak order).', [PageNames[FMode]]), 2);
   end;
   if Assigned(pbFlow) then pbFlow.Invalidate;
   UpdateMT5;

@@ -16,6 +16,7 @@ type
     FURL, FProfile: string;
     FPI: TProcessInformation;
     FWnd: HWND;
+    FWndTid: DWORD;   { thread jendela Edge yang input-nya digabung dengan aplikasi }
     FTimer: TTimer;
     FWaitUntil: TDateTime;
     FOnStatus: TGetStrProc;
@@ -148,6 +149,10 @@ begin
   st := (st and not (WS_POPUP or WS_CAPTION or WS_THICKFRAME or WS_SYSMENU or WS_MINIMIZEBOX or WS_MAXIMIZEBOX)) or WS_CHILD;
   SetWindowLong(FWnd, GWL_STYLE, st);
   Windows.SetParent(FWnd, FHost.Handle);
+  { gabungkan input Edge dengan aplikasi: satu fokus keyboard & satu kursor teks
+    (kotak cari koin ATAU kolom di web, yang terakhir diklik pengguna) }
+  FWndTid := GetWindowThreadProcessId(FWnd, nil);
+  if (FWndTid <> 0) and not AttachThreadInput(GetCurrentThreadId, FWndTid, True) then FWndTid := 0;
   Fit;
   ShowWindow(FWnd, SW_SHOW);
   Status('');
@@ -168,6 +173,8 @@ end;
 procedure TWebEmbed.Close;
 begin
   FTimer.Enabled := False;
+  if FWndTid <> 0 then AttachThreadInput(GetCurrentThreadId, FWndTid, False);
+  FWndTid := 0;
   if Running then PostMessage(FWnd, WM_CLOSE, 0, 0);
   if FPI.hProcess <> 0 then
   begin
